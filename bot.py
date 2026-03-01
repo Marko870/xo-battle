@@ -6,8 +6,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("8279777160:AAElFTqwzh1m-8iJ1SX5M6ryRKFnvhx6p1Q", "YOUR_TOKEN_HERE")
-WEBAPP_URL = os.environ.get("https://marko870.github.io/xo-battle/", "https://YOUR_GITHUB_USERNAME.github.io/xo-battle")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8279777160:AAElFTqwzh1m-8iJ1SX5M6ryRKFnvhx6p1Q")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://marko870.github.io/xo-battle/")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
