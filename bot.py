@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -11,20 +12,14 @@ WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://YOUR_GITHUB_USERNAME.github.i
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    keyboard = [
-        [InlineKeyboardButton(
-            "🎮 افتح اللعبة",
-            web_app=WebAppInfo(url=WEBAPP_URL)
-        )]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
+    keyboard = [[InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
         f"🎮 *أهلاً {user.first_name}!*\n\n"
         "مرحباً بك في *XO Battle* ⚡\n\n"
         "اضغط الزر لفتح اللعبة:\n"
         "• العب محلياً مع شخص بجانبك\n"
         "• أو أنشئ غرفة وشارك الكود مع صديقك",
-        reply_markup=markup,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
@@ -38,16 +33,16 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   • *إنشاء غرفة* — شارك الكود مع صديقك\n"
         "   • *انضم لغرفة* — ادخل كود صديقك\n\n"
         "3️⃣ العب واربح! 🏆",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎮 العب الآن", web_app=WebAppInfo(url=WEBAPP_URL))]]),
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
-def main():
+async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     logger.info("Bot running...")
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
