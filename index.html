@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>XO Battle</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --card: #1a1a26;
+    --x-color: #ff4d6d;
+    --o-color: #4cc9f0;
+    --x-glow: rgba(255,77,109,0.4);
+    --o-glow: rgba(76,201,240,0.4);
+    --text: #f0f0ff;
+    --muted: #6060a0;
+    --accent: #7b2fff;
+    --win-line: #ffd700;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Tajawal', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ── BACKGROUND EFFECTS ── */
+  body::before {
+    content:'';
+    position:fixed; inset:0;
+    background:
+      radial-gradient(ellipse 60% 40% at 20% 10%, rgba(255,77,109,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 40% at 80% 80%, rgba(76,201,240,0.08) 0%, transparent 60%),
+      radial-gradient(ellipse 40% 30% at 50% 50%, rgba(123,47,255,0.05) 0%, transparent 60%);
+    pointer-events:none; z-index:0;
+  }
+
+  .noise {
+    position:fixed; inset:0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events:none; z-index:0; opacity:0.4;
+  }
+
+  /* ── LAYOUT ── */
+  .container {
+    position:relative; z-index:1;
+    width:100%; max-width:420px;
+    padding:20px 16px 40px;
+    display:flex; flex-direction:column; align-items:center; gap:20px;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    text-align:center; width:100%;
+  }
+
+  .logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: -2px;
+    background: linear-gradient(135deg, var(--x-color), var(--accent), var(--o-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .logo span { font-size: 1.6rem; opacity:0.6; }
+
+  .subtitle {
+    font-size: 0.85rem;
+    color: var(--muted);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  /* ── PLAYERS BAR ── */
+  .players-bar {
+    display:flex; align-items:center; justify-content:space-between;
+    width:100%; gap:10px;
+  }
+
+  .player-card {
+    flex:1; background: var(--card);
+    border-radius: 16px;
+    padding: 12px 14px;
+    border: 1.5px solid transparent;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .player-card::before {
+    content:''; position:absolute; inset:0;
+    background: linear-gradient(135deg, var(--mark-color, #333) 0%, transparent 60%);
+    opacity: 0.06; transition: opacity 0.3s;
+  }
+
+  .player-card.active {
+    border-color: var(--mark-color, var(--muted));
+    box-shadow: 0 0 20px var(--mark-glow, transparent);
+  }
+
+  .player-card.active::before { opacity: 0.12; }
+
+  .player-x { --mark-color: var(--x-color); --mark-glow: var(--x-glow); }
+  .player-o { --mark-color: var(--o-color); --mark-glow: var(--o-glow); }
+
+  .player-mark {
+    font-size: 1.6rem; line-height:1;
+    margin-bottom: 4px;
+  }
+
+  .player-name {
+    font-size: 0.8rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .player-label {
+    font-size: 0.7rem;
+    font-family: 'Space Mono', monospace;
+    color: var(--mark-color);
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .vs-badge {
+    font-family: 'Space Mono', monospace;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--muted);
+    background: var(--surface);
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid #1e1e30;
+  }
+
+  /* ── STATUS ── */
+  .status-bar {
+    width:100%;
+    background: var(--card);
+    border-radius: 12px;
+    padding: 10px 16px;
+    text-align: center;
+    font-size: 0.9rem;
+    border: 1px solid #1e1e30;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.3s;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.5s infinite;
+  }
+
+  @keyframes pulse {
+    0%,100%{ opacity:1; transform:scale(1); }
+    50%{ opacity:0.4; transform:scale(0.7); }
+  }
+
+  /* ── BOARD ── */
+  .board-wrapper {
+    position: relative;
+    width: 100%;
+    max-width: 340px;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3,1fr);
+    gap: 10px;
+    width: 100%;
+  }
+
+  .cell {
+    aspect-ratio: 1;
+    background: var(--card);
+    border-radius: 18px;
+    border: 1.5px solid #1e1e30;
+    display: flex; align-items:center; justify-content:center;
+    font-size: 3rem;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .cell::before {
+    content:'';
+    position:absolute; inset:0;
+    background: radial-gradient(circle at center, white 0%, transparent 70%);
+    opacity:0;
+    transition: opacity 0.15s;
+  }
+
+  .cell:active::before { opacity: 0.05; }
+
+  .cell:hover:not(.taken):not(.disabled) {
+    border-color: var(--accent);
+    transform: scale(1.04);
+    background: #1e1e2e;
+  }
+
+  .cell.taken { cursor: default; }
+  .cell.disabled { cursor: not-allowed; }
+
+  .cell.x-cell {
+    border-color: rgba(255,77,109,0.4);
+    background: rgba(255,77,109,0.06);
+  }
+
+  .cell.o-cell {
+    border-color: rgba(76,201,240,0.4);
+    background: rgba(76,201,240,0.06);
+  }
+
+  .cell.winning {
+    animation: winPulse 0.6s ease forwards;
+    border-color: var(--win-line) !important;
+    background: rgba(255,215,0,0.08) !important;
+  }
+
+  @keyframes winPulse {
+    0%{ transform:scale(1); }
+    40%{ transform:scale(1.12); }
+    100%{ transform:scale(1.05); }
+  }
+
+  .cell-mark {
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.2s;
+    transform: scale(0);
+    opacity: 0;
+    display: block;
+  }
+
+  .cell-mark.visible {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  /* ── SCREENS ── */
+  .screen {
+    display: none;
+    width: 100%;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .screen.active { display: flex; }
+
+  /* ── WAITING SCREEN ── */
+  .waiting-card {
+    background: var(--card);
+    border-radius: 20px;
+    padding: 28px 24px;
+    text-align: center;
+    border: 1px solid #1e1e30;
+    width: 100%;
+  }
+
+  .waiting-icon {
+    font-size: 3.5rem;
+    margin-bottom: 12px;
+    animation: spin 3s linear infinite;
+  }
+
+  @keyframes spin {
+    0%{ transform:rotate(0deg); }
+    100%{ transform:rotate(360deg); }
+  }
+
+  .waiting-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .waiting-desc {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    margin-bottom: 16px;
+  }
+
+  .room-code {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: 6px;
+    color: var(--accent);
+    background: rgba(123,47,255,0.1);
+    padding: 12px 20px;
+    border-radius: 12px;
+    border: 1px dashed rgba(123,47,255,0.4);
+    margin: 8px 0;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .room-code:active { transform: scale(0.97); }
+
+  .code-hint {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── JOIN SCREEN ── */
+  .join-input-wrap {
+    width:100%;
+    background: var(--card);
+    border-radius: 20px;
+    padding: 24px;
+    border: 1px solid #1e1e30;
+  }
+
+  .join-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+
+  .code-inputs {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 20px;
+    direction: ltr;
+  }
+
+  .code-digit {
+    width: 48px; height: 56px;
+    background: var(--surface);
+    border: 1.5px solid #2a2a40;
+    border-radius: 12px;
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+    transition: all 0.2s;
+    caret-color: var(--accent);
+  }
+
+  .code-digit:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(123,47,255,0.2);
+  }
+
+  /* ── BUTTONS ── */
+  .btn {
+    width: 100%;
+    padding: 14px 24px;
+    border-radius: 14px;
+    border: none;
+    font-family: 'Tajawal', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn:active { transform: scale(0.97); }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #a855f7);
+    color: white;
+    box-shadow: 0 4px 20px rgba(123,47,255,0.4);
+  }
+
+  .btn-primary:hover { box-shadow: 0 6px 28px rgba(123,47,255,0.6); }
+
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--text);
+    border: 1.5px solid #2a2a40;
+  }
+
+  .btn-danger {
+    background: rgba(255,77,109,0.15);
+    color: var(--x-color);
+    border: 1.5px solid rgba(255,77,109,0.3);
+  }
+
+  .btn-sm {
+    width: auto;
+    padding: 8px 18px;
+    font-size: 0.85rem;
+    border-radius: 10px;
+  }
+
+  /* ── HOME SCREEN ── */
+  .home-actions { width:100%; display:flex; flex-direction:column; gap:10px; }
+
+  .mode-card {
+    background: var(--card);
+    border-radius: 18px;
+    padding: 20px;
+    border: 1.5px solid #1e1e30;
+    cursor: pointer;
+    transition: all 0.25s;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .mode-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .mode-card:active { transform: scale(0.98); }
+
+  .mode-icon {
+    font-size: 2.2rem;
+    width: 56px; height: 56px;
+    background: var(--surface);
+    border-radius: 14px;
+    display: flex; align-items:center; justify-content:center;
+    flex-shrink: 0;
+  }
+
+  .mode-info { flex:1; }
+
+  .mode-title { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+
+  .mode-desc { font-size: 0.8rem; color: var(--muted); }
+
+  .mode-arrow { color: var(--muted); font-size: 1.2rem; }
+
+  /* ── RESULT SCREEN ── */
+  .result-card {
+    background: var(--card);
+    border-radius: 24px;
+    padding: 32px 24px;
+    text-align: center;
+    border: 1px solid #1e1e30;
+    width: 100%;
+  }
+
+  .result-emoji { font-size: 5rem; margin-bottom: 12px; display: block; }
+
+  .result-title {
+    font-size: 1.8rem;
+    font-weight: 900;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--x-color), var(--accent), var(--o-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .result-sub { color: var(--muted); font-size: 0.95rem; margin-bottom: 24px; }
+
+  .result-board-mini {
+    display: grid;
+    grid-template-columns: repeat(3,1fr);
+    gap: 5px;
+    max-width: 180px;
+    margin: 0 auto 24px;
+  }
+
+  .mini-cell {
+    aspect-ratio:1;
+    background: var(--surface);
+    border-radius: 8px;
+    display: flex; align-items:center; justify-content:center;
+    font-size: 1.1rem;
+  }
+
+  .mini-cell.win-cell {
+    background: rgba(255,215,0,0.1);
+    border: 1px solid rgba(255,215,0,0.3);
+  }
+
+  /* ── SCORE ── */
+  .score-bar {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .score-item {
+    flex:1;
+    background: var(--card);
+    border-radius: 14px;
+    padding: 12px;
+    text-align:center;
+    border: 1px solid #1e1e30;
+  }
+
+  .score-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.8rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .score-x .score-num { color: var(--x-color); }
+  .score-o .score-num { color: var(--o-color); }
+
+  .score-label { font-size: 0.7rem; color: var(--muted); margin-top: 4px; }
+
+  /* ── TOAST ── */
+  .toast {
+    position: fixed;
+    top: 16px; left: 50%;
+    transform: translateX(-50%) translateY(-80px);
+    background: var(--card);
+    border: 1px solid #2a2a40;
+    border-radius: 12px;
+    padding: 10px 20px;
+    font-size: 0.9rem;
+    z-index: 999;
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    white-space: nowrap;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── LOCAL GAME ── */
+  .local-turn-indicator {
+    width:100%;
+    text-align:center;
+    padding: 10px;
+    border-radius: 12px;
+    font-size: 0.95rem;
+    transition: all 0.3s;
+  }
+
+  .turn-x { background: rgba(255,77,109,0.1); color: var(--x-color); border: 1px solid rgba(255,77,109,0.2); }
+  .turn-o { background: rgba(76,201,240,0.1); color: var(--o-color); border: 1px solid rgba(76,201,240,0.2); }
+
+  /* animations */
+  @keyframes fadeIn {
+    from{ opacity:0; transform:translateY(16px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+
+  .screen.active > * {
+    animation: fadeIn 0.4s ease both;
+  }
+
+  .screen.active > *:nth-child(1){ animation-delay:0s; }
+  .screen.active > *:nth-child(2){ animation-delay:0.05s; }
+  .screen.active > *:nth-child(3){ animation-delay:0.1s; }
+  .screen.active > *:nth-child(4){ animation-delay:0.15s; }
+  .screen.active > *:nth-child(5){ animation-delay:0.2s; }
+
+  .divider {
+    width:100%; text-align:center;
+    color: var(--muted);
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .divider::before,.divider::after {
+    content:''; flex:1;
+    height:1px; background:#1e1e30;
+  }
+</style>
+</head>
+<body>
+<div class="noise"></div>
+
+<div class="container">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="logo">XO<span>✦</span>BATTLE</div>
+    <div class="subtitle">تنافس · تفوّق · انتصر</div>
+  </div>
+
+  <!-- ══════════════ HOME SCREEN ══════════════ -->
+  <div class="screen active" id="screen-home">
+    <div class="home-actions">
+      <div class="mode-card" onclick="startLocal()">
+        <div class="mode-icon">🎮</div>
+        <div class="mode-info">
+          <div class="mode-title">لعب محلي</div>
+          <div class="mode-desc">لاعبين على نفس الجهاز</div>
+        </div>
+        <div class="mode-arrow">›</div>
+      </div>
+
+      <div class="divider">أو العب أونلاين</div>
+
+      <div class="mode-card" onclick="showScreen('screen-create')">
+        <div class="mode-icon">🏠</div>
+        <div class="mode-info">
+          <div class="mode-title">إنشاء غرفة</div>
+          <div class="mode-desc">شارك الكود مع صديقك</div>
+        </div>
+        <div class="mode-arrow">›</div>
+      </div>
+
+      <div class="mode-card" onclick="showScreen('screen-join')">
+        <div class="mode-icon">🔗</div>
+        <div class="mode-info">
+          <div class="mode-title">انضم لغرفة</div>
+          <div class="mode-desc">ادخل كود الغرفة</div>
+        </div>
+        <div class="mode-arrow">›</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ CREATE ROOM SCREEN ══════════════ -->
+  <div class="screen" id="screen-create">
+    <div class="waiting-card">
+      <div class="waiting-icon">⏳</div>
+      <div class="waiting-title">غرفتك جاهزة!</div>
+      <div class="waiting-desc">شارك الكود مع صديقك حتى ينضم</div>
+      <div class="room-code" id="room-code-display" onclick="copyCode()">----</div>
+      <div class="code-hint">اضغط للنسخ</div>
+    </div>
+    <div id="waiting-status" class="status-bar">
+      <div class="status-dot"></div>
+      <span>ننتظر الخصم...</span>
+    </div>
+    <button class="btn btn-secondary" onclick="goHome()">← رجوع</button>
+  </div>
+
+  <!-- ══════════════ JOIN SCREEN ══════════════ -->
+  <div class="screen" id="screen-join">
+    <div class="join-input-wrap">
+      <div class="join-title">🔗 ادخل كود الغرفة</div>
+      <div class="code-inputs" id="code-inputs">
+        <input class="code-digit" maxlength="1" inputmode="numeric" pattern="[0-9]*"/>
+        <input class="code-digit" maxlength="1" inputmode="numeric" pattern="[0-9]*"/>
+        <input class="code-digit" maxlength="1" inputmode="numeric" pattern="[0-9]*"/>
+        <input class="code-digit" maxlength="1" inputmode="numeric" pattern="[0-9]*"/>
+      </div>
+      <button class="btn btn-primary" onclick="joinRoom()">انضم للغرفة →</button>
+    </div>
+    <button class="btn btn-secondary" onclick="goHome()">← رجوع</button>
+  </div>
+
+  <!-- ══════════════ GAME SCREEN ══════════════ -->
+  <div class="screen" id="screen-game">
+
+    <div class="players-bar">
+      <div class="player-card player-x" id="player-x-card">
+        <div class="player-label">X</div>
+        <div class="player-mark">❌</div>
+        <div class="player-name" id="player-x-name">لاعب 1</div>
+      </div>
+      <div class="vs-badge">VS</div>
+      <div class="player-card player-o" id="player-o-card">
+        <div class="player-label">O</div>
+        <div class="player-mark">⭕</div>
+        <div class="player-name" id="player-o-name">لاعب 2</div>
+      </div>
+    </div>
+
+    <div id="local-turn" class="local-turn-indicator turn-x" style="display:none">
+      دور ❌ لاعب 1
+    </div>
+
+    <div class="status-bar" id="game-status">
+      <div class="status-dot"></div>
+      <span id="game-status-text">اللعبة جارية</span>
+    </div>
+
+    <div class="score-bar">
+      <div class="score-item score-x">
+        <div class="score-num" id="score-x">0</div>
+        <div class="score-label">❌ انتصارات</div>
+      </div>
+      <div class="score-item">
+        <div class="score-num" style="color:var(--muted)" id="score-draw">0</div>
+        <div class="score-label">تعادل</div>
+      </div>
+      <div class="score-item score-o">
+        <div class="score-num" id="score-o">0</div>
+        <div class="score-label">⭕ انتصارات</div>
+      </div>
+    </div>
+
+    <div class="board-wrapper">
+      <div class="board" id="board"></div>
+    </div>
+
+    <button class="btn btn-danger btn-sm" onclick="resetGame()" id="btn-reset">إعادة الجولة 🔄</button>
+
+  </div>
+
+  <!-- ══════════════ RESULT SCREEN ══════════════ -->
+  <div class="screen" id="screen-result">
+    <div class="result-card">
+      <span class="result-emoji" id="result-emoji">🏆</span>
+      <div class="result-title" id="result-title">فاز!</div>
+      <div class="result-sub" id="result-sub">مباراة رائعة</div>
+      <div class="result-board-mini" id="result-mini-board"></div>
+      <button class="btn btn-primary" onclick="playAgain()">لعبة جديدة 🎮</button>
+      <button class="btn btn-secondary" style="margin-top:8px" onclick="goHome()">القائمة الرئيسية 🏠</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// TELEGRAM WEBAPP INIT
+// ─────────────────────────────────────────────
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.enableClosingConfirmation();
+}
+
+const tgUser = tg?.initDataUnsafe?.user;
+const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let gameMode = null; // 'local' | 'online'
+let board = Array(9).fill('');
+let currentTurn = 'X';
+let gameActive = false;
+let myMark = null;
+let roomCode = null;
+let pollInterval = null;
+let scores = { X:0, O:0, draw:0 };
+let lastWinCells = [];
+
+// "Online" simulation using localStorage as a shared store
+// In production, replace with your backend API
+
+const WINNING_LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+// ─────────────────────────────────────────────
+// NAVIGATION
+// ─────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function goHome() {
+  clearInterval(pollInterval);
+  gameActive = false;
+  roomCode = null;
+  myMark = null;
+  gameMode = null;
+  showScreen('screen-home');
+}
+
+// ─────────────────────────────────────────────
+// BOARD RENDER
+// ─────────────────────────────────────────────
+function renderBoard(disabled = false) {
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+
+  board.forEach((cell, i) => {
+    const div = document.createElement('div');
+    div.className = 'cell';
+
+    if (cell === 'X') div.classList.add('x-cell', 'taken');
+    else if (cell === 'O') div.classList.add('o-cell', 'taken');
+    else if (disabled || !gameActive) div.classList.add('disabled');
+
+    if (lastWinCells.includes(i)) div.classList.add('winning');
+
+    const mark = document.createElement('span');
+    mark.className = 'cell-mark';
+    mark.textContent = cell === 'X' ? '❌' : cell === 'O' ? '⭕' : '';
+    div.appendChild(mark);
+
+    if (!cell && gameActive && !disabled) {
+      div.onclick = () => handleMove(i);
+    }
+
+    boardEl.appendChild(div);
+
+    // Trigger animation for existing marks
+    if (cell) {
+      requestAnimationFrame(() => mark.classList.add('visible'));
+    }
+  });
+}
+
+function animateMark(index) {
+  const cells = document.querySelectorAll('.cell');
+  const mark = cells[index]?.querySelector('.cell-mark');
+  if (mark) {
+    requestAnimationFrame(() => mark.classList.add('visible'));
+  }
+}
+
+// ─────────────────────────────────────────────
+// LOCAL GAME
+// ─────────────────────────────────────────────
+function startLocal() {
+  gameMode = 'local';
+  board = Array(9).fill('');
+  currentTurn = 'X';
+  gameActive = true;
+  lastWinCells = [];
+  myMark = null;
+
+  document.getElementById('player-x-name').textContent = 'لاعب 1';
+  document.getElementById('player-o-name').textContent = 'لاعب 2';
+  document.getElementById('player-x-card').classList.add('active');
+  document.getElementById('player-o-card').classList.remove('active');
+
+  document.getElementById('local-turn').style.display = 'block';
+  updateLocalTurnUI();
+
+  document.getElementById('game-status').style.display = 'none';
+  document.getElementById('btn-reset').style.display = 'block';
+
+  renderBoard();
+  showScreen('screen-game');
+}
+
+function updateLocalTurnUI() {
+  const el = document.getElementById('local-turn');
+  const xCard = document.getElementById('player-x-card');
+  const oCard = document.getElementById('player-o-card');
+
+  if (currentTurn === 'X') {
+    el.className = 'local-turn-indicator turn-x';
+    el.textContent = 'دور ❌ لاعب 1';
+    xCard.classList.add('active');
+    oCard.classList.remove('active');
+  } else {
+    el.className = 'local-turn-indicator turn-o';
+    el.textContent = 'دور ⭕ لاعب 2';
+    oCard.classList.add('active');
+    xCard.classList.remove('active');
+  }
+}
+
+// ─────────────────────────────────────────────
+// MOVE HANDLER
+// ─────────────────────────────────────────────
+function handleMove(index) {
+  if (!gameActive || board[index] !== '') return;
+
+  if (gameMode === 'local') {
+    board[index] = currentTurn;
+    renderBoard();
+    animateMark(index);
+
+    const winner = checkWinner();
+    if (winner) {
+      endGame(winner);
+    } else if (board.every(c => c !== '')) {
+      endGame('draw');
+    } else {
+      currentTurn = currentTurn === 'X' ? 'O' : 'X';
+      updateLocalTurnUI();
+    }
+  } else if (gameMode === 'online') {
+    if (currentTurn !== myMark) {
+      showToast('⏳ انتظر دورك!');
+      return;
+    }
+    board[index] = myMark;
+    renderBoard(true);
+    animateMark(index);
+    saveOnlineState();
+
+    const winner = checkWinner();
+    if (winner) endGame(winner);
+    else if (board.every(c => c !== '')) endGame('draw');
+    else {
+      currentTurn = currentTurn === 'X' ? 'O' : 'X';
+      updateOnlineStatusUI();
+    }
+  }
+}
+
+function checkWinner() {
+  for (const [a,b,c] of WINNING_LINES) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      lastWinCells = [a,b,c];
+      return board[a];
+    }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────
+// END GAME
+// ─────────────────────────────────────────────
+function endGame(result) {
+  gameActive = false;
+  lastWinCells = result === 'draw' ? [] : lastWinCells;
+  renderBoard(true);
+
+  if (result === 'draw') {
+    scores.draw++;
+    document.getElementById('score-draw').textContent = scores.draw;
+  } else if (result === 'X') {
+    scores.X++;
+    document.getElementById('score-x').textContent = scores.X;
+  } else {
+    scores.O++;
+    document.getElementById('score-o').textContent = scores.O;
+  }
+
+  setTimeout(() => showResult(result), 700);
+}
+
+function showResult(result) {
+  let emoji, title, sub;
+
+  if (result === 'draw') {
+    emoji = '🤝'; title = 'تعادل!'; sub = 'كانت مباراة متكافئة';
+  } else if (gameMode === 'local') {
+    const winner = result === 'X' ? 'لاعب 1 ❌' : 'لاعب 2 ⭕';
+    emoji = '🏆'; title = `${winner} فاز!`; sub = 'مباراة رائعة!';
+  } else {
+    const isMe = result === myMark;
+    emoji = isMe ? '🏆' : '😔';
+    title = isMe ? 'فزت! 🎉' : 'خسرت!';
+    sub = isMe ? 'أداء مميز!' : 'حظ أوفر في المرة القادمة';
+  }
+
+  document.getElementById('result-emoji').textContent = emoji;
+  document.getElementById('result-title').textContent = title;
+  document.getElementById('result-sub').textContent = sub;
+
+  // Mini board
+  const mini = document.getElementById('result-mini-board');
+  mini.innerHTML = '';
+  board.forEach((cell, i) => {
+    const d = document.createElement('div');
+    d.className = 'mini-cell' + (lastWinCells.includes(i) ? ' win-cell' : '');
+    d.textContent = cell === 'X' ? '❌' : cell === 'O' ? '⭕' : '';
+    mini.appendChild(d);
+  });
+
+  showScreen('screen-result');
+  if (tg) tg.HapticFeedback?.impactOccurred('medium');
+}
+
+function playAgain() {
+  board = Array(9).fill('');
+  lastWinCells = [];
+  gameActive = true;
+
+  if (gameMode === 'local') {
+    currentTurn = 'X';
+    updateLocalTurnUI();
+    renderBoard();
+    showScreen('screen-game');
+  } else {
+    // Online: host starts new round
+    currentTurn = 'X';
+    saveOnlineState();
+    renderBoard(myMark !== 'X');
+    updateOnlineStatusUI();
+    showScreen('screen-game');
+    startPolling();
+  }
+}
+
+function resetGame() {
+  if (gameMode !== 'local') return;
+  board = Array(9).fill('');
+  lastWinCells = [];
+  currentTurn = 'X';
+  gameActive = true;
+  updateLocalTurnUI();
+  renderBoard();
+}
+
+// ─────────────────────────────────────────────
+// ONLINE ROOMS (localStorage simulation)
+// Replace this section with real backend calls
+// ─────────────────────────────────────────────
+function genCode() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function saveOnlineState() {
+  const state = {
+    board, currentTurn,
+    players: getRoom()?.players || { X: myName, O: '...' },
+    ts: Date.now()
+  };
+  localStorage.setItem('xo_room_' + roomCode, JSON.stringify(state));
+}
+
+function getRoom() {
+  const raw = localStorage.getItem('xo_room_' + roomCode);
+  return raw ? JSON.parse(raw) : null;
+}
+
+function createRoom() {
+  roomCode = genCode();
+  myMark = 'X';
+  const state = {
+    board: Array(9).fill(''),
+    currentTurn: 'X',
+    players: { X: myName, O: null },
+    ts: Date.now()
+  };
+  localStorage.setItem('xo_room_' + roomCode, JSON.stringify(state));
+  document.getElementById('room-code-display').textContent = roomCode;
+  startPolling();
+}
+
+function joinRoom() {
+  const digits = [...document.querySelectorAll('.code-digit')].map(i => i.value).join('');
+  if (digits.length < 4) { showToast('⚠️ أدخل الكود كاملاً'); return; }
+
+  const room = JSON.parse(localStorage.getItem('xo_room_' + digits) || 'null');
+  if (!room) { showToast('❌ الغرفة غير موجودة'); return; }
+  if (room.players.O) { showToast('⚠️ الغرفة ممتلئة'); return; }
+
+  roomCode = digits;
+  myMark = 'O';
+  room.players.O = myName;
+  localStorage.setItem('xo_room_' + roomCode, JSON.stringify(room));
+
+  board = room.board;
+  currentTurn = room.currentTurn;
+
+  document.getElementById('player-x-name').textContent = room.players.X;
+  document.getElementById('player-o-name').textContent = myName;
+
+  startOnlineGame();
+}
+
+function startOnlineGame() {
+  gameMode = 'online';
+  gameActive = true;
+  document.getElementById('local-turn').style.display = 'none';
+  document.getElementById('game-status').style.display = 'flex';
+  document.getElementById('btn-reset').style.display = 'none';
+  renderBoard(currentTurn !== myMark);
+  updateOnlineStatusUI();
+  showScreen('screen-game');
+  startPolling();
+}
+
+function updateOnlineStatusUI() {
+  const isMyTurn = currentTurn === myMark;
+  const xCard = document.getElementById('player-x-card');
+  const oCard = document.getElementById('player-o-card');
+  const statusText = document.getElementById('game-status-text');
+
+  if (currentTurn === 'X') {
+    xCard.classList.add('active'); oCard.classList.remove('active');
+  } else {
+    oCard.classList.add('active'); xCard.classList.remove('active');
+  }
+
+  statusText.textContent = isMyTurn ? '🟢 دورك، العب!' : '⏳ دور الخصم...';
+}
+
+function startPolling() {
+  clearInterval(pollInterval);
+  pollInterval = setInterval(() => {
+    const room = getRoom();
+    if (!room) return;
+
+    // Opponent just joined
+    if (gameMode === null && myMark === 'X' && room.players.O) {
+      document.getElementById('player-x-name').textContent = myName;
+      document.getElementById('player-o-name').textContent = room.players.O;
+      document.getElementById('waiting-status').innerHTML = `✅ ${room.players.O} انضم! اللعبة بدأت`;
+      setTimeout(() => {
+        board = room.board;
+        currentTurn = room.currentTurn;
+        startOnlineGame();
+      }, 800);
+      return;
+    }
+
+    if (gameMode === 'online' && currentTurn !== myMark && gameActive) {
+      if (room.ts > (window._lastTs || 0)) {
+        window._lastTs = room.ts;
+        const prevBoard = [...board];
+        board = room.board;
+        currentTurn = room.currentTurn;
+
+        // Find and animate new cell
+        board.forEach((cell, i) => {
+          if (cell && !prevBoard[i]) {
+            lastWinCells = [];
+            renderBoard(currentTurn !== myMark);
+            animateMark(i);
+            if (tg) tg.HapticFeedback?.notificationOccurred('success');
+          }
+        });
+
+        const winner = checkWinner();
+        if (winner) endGame(winner);
+        else if (board.every(c => c !== '')) endGame('draw');
+        else {
+          updateOnlineStatusUI();
+          // Re-enable board for my turn
+          if (currentTurn === myMark) renderBoard(false);
+        }
+      }
+    }
+  }, 800);
+}
+
+// ─────────────────────────────────────────────
+// CREATE ROOM SCREEN INIT
+// ─────────────────────────────────────────────
+const origCreateScreen = document.getElementById('screen-create');
+document.querySelector('[onclick="showScreen(\'screen-create\')"]').onclick = function() {
+  showScreen('screen-create');
+  createRoom();
+};
+
+// ─────────────────────────────────────────────
+// JOIN CODE INPUTS
+// ─────────────────────────────────────────────
+const codeDigits = document.querySelectorAll('.code-digit');
+codeDigits.forEach((input, idx) => {
+  input.addEventListener('input', () => {
+    input.value = input.value.replace(/\D/g,'');
+    if (input.value && idx < 3) codeDigits[idx+1].focus();
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Backspace' && !input.value && idx > 0) codeDigits[idx-1].focus();
+  });
+});
+
+// ─────────────────────────────────────────────
+// COPY CODE
+// ─────────────────────────────────────────────
+function copyCode() {
+  if (navigator.clipboard && roomCode) {
+    navigator.clipboard.writeText(roomCode);
+    showToast('✅ تم نسخ الكود: ' + roomCode);
+  }
+}
+
+// ─────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ─────────────────────────────────────────────
+// INIT BOARD
+// ─────────────────────────────────────────────
+renderBoard(true);
+</script>
+</body>
+</html>
