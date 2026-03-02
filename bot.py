@@ -85,16 +85,19 @@ async def try_match(app):
             "current_turn": "X",
             "status": "playing"
         }).execute()
-        # أرسل للاعبين — كل لاعب يحصل على رابط مباشر مع الكود والدور
-        for player, mark_emoji, mark_letter in [(p1, "❌", "X"), (p2, "⭕", "O")]:
-            direct_url = f"{WEBAPP_URL}#room={room_id}&mark={mark_letter}"
-            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة مباشرة", web_app=WebAppInfo(url=direct_url))]]
+        # احفظ غرفة كل لاعب بـ Supabase
+        sb.from_("player_rooms").upsert({"telegram_id": p1["telegram_id"], "room_id": room_id, "mark": "X"}).execute()
+        sb.from_("player_rooms").upsert({"telegram_id": p2["telegram_id"], "room_id": room_id, "mark": "O"}).execute()
+
+        # أرسل للاعبين
+        for player, mark_emoji in [(p1, "❌"), (p2, "⭕")]:
+            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة مباشرة", web_app=WebAppInfo(url=WEBAPP_URL))]]
             try:
                 await app.bot.send_message(
                     chat_id=int(player["telegram_id"]),
                     text=f"🎮 *وجدنا لك خصم!*\n\n"
                          f"أنت: {mark_emoji}\n"
-                         f"الخصم: {p2['name'] if mark_letter == 'X' else p1['name']}\n\n"
+                         f"الخصم: {p2['name'] if player == p1 else p1['name']}\n\n"
                          f"اضغط الزر لتبدأ اللعبة مباشرة! 👇",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="Markdown"
