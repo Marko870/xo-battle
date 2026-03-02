@@ -299,9 +299,9 @@ const myId = tgUser ? String(tgUser.id) : 'local_' + Math.random().toString(36).
 const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
 
 // قراءة الـ room و mark من الرابط تلقائياً
-const hashParams = new URLSearchParams(window.location.hash.slice(1));
-const autoRoom = hashParams.get('room');
-const autoMark = hashParams.get('mark');
+// لا نعتمد على URL — نقرأ الغرفة من Supabase مباشرة
+let autoRoom = null;
+let autoMark = null;
 
 // ── STATE ──
 let gameMode = null;
@@ -400,26 +400,34 @@ function handleMove(i) {
   if (checkWin(board, currentTurn)) {
     renderBoard(true);
 
-// إذا في room بالرابط، افتح اللعبة تلقائياً
-if (autoRoom && autoMark) {
-  setTimeout(async () => {
-    const { data, error } = await sb.from('rooms').select('*').eq('id', autoRoom).single();
-    if (error || !data) { showToast('❌ الغرفة غير موجودة'); return; }
-    roomId = autoRoom;
-    myMark = autoMark;
-    board = data.board.split('').map(c => c === '-' ? '' : c);
-    currentTurn = data.current_turn;
+// لما الـ WebApp يفتح، تحقق إذا في غرفة نشطة لهاللاعب
+setTimeout(async () => {
+  if (!myId || myId.startsWith('local_')) return;
+  try {
+    const { data, error } = await sb.from('player_rooms').select('*').eq('telegram_id', myId).single();
+    if (error || !data) return;
+    // في غرفة — افتحها تلقائياً
+    const { data: room } = await sb.from('rooms').select('*').eq('id', data.room_id).single();
+    if (!room || room.status === 'finished') {
+      // الغرفة انتهت، امسح السجل
+      await sb.from('player_rooms').delete().eq('telegram_id', myId);
+      return;
+    }
+    roomId = data.room_id;
+    myMark = data.mark;
+    board = room.board.split('').map(c => c === '-' ? '' : c);
+    currentTurn = room.current_turn;
     gameMode = 'online';
-    gameActive = true;
-    document.getElementById('px-name').textContent = data.player_x_name;
-    document.getElementById('po-name').textContent = data.player_o_name;
+    gameActive = room.status !== 'finished';
+    document.getElementById('px-name').textContent = room.player_x_name;
+    document.getElementById('po-name').textContent = room.player_o_name;
     document.getElementById('btn-reset').style.display = 'none';
     renderBoard(currentTurn !== myMark);
     updateTurnUI();
     showScreen('screen-game');
     subscribeRoom();
-  }, 500);
-}
+  } catch(e) { console.log('No active room'); }
+}, 800);
     if (gameMode==='local') { endLocal(currentTurn); }
     else { endOnline(currentTurn); }
     return;
@@ -686,3 +694,4 @@ renderBoard(true);
 </script>
 </body>
 </html>
+
