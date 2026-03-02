@@ -298,6 +298,11 @@ const tgUser = tg?.initDataUnsafe?.user;
 const myId = tgUser ? String(tgUser.id) : 'local_' + Math.random().toString(36).slice(2,8);
 const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
 
+// قراءة الـ room و mark من الرابط تلقائياً
+const urlParams = new URLSearchParams(window.location.search);
+const autoRoom = urlParams.get('room');
+const autoMark = urlParams.get('mark');
+
 // ── STATE ──
 let gameMode = null;
 let board = Array(9).fill('');
@@ -394,6 +399,27 @@ function handleMove(i) {
 
   if (checkWin(board, currentTurn)) {
     renderBoard(true);
+
+// إذا في room بالرابط، افتح اللعبة تلقائياً
+if (autoRoom && autoMark) {
+  setTimeout(async () => {
+    const { data, error } = await sb.from('rooms').select('*').eq('id', autoRoom).single();
+    if (error || !data) { showToast('❌ الغرفة غير موجودة'); return; }
+    roomId = autoRoom;
+    myMark = autoMark;
+    board = data.board.split('').map(c => c === '-' ? '' : c);
+    currentTurn = data.current_turn;
+    gameMode = 'online';
+    gameActive = true;
+    document.getElementById('px-name').textContent = data.player_x_name;
+    document.getElementById('po-name').textContent = data.player_o_name;
+    document.getElementById('btn-reset').style.display = 'none';
+    renderBoard(currentTurn !== myMark);
+    updateTurnUI();
+    showScreen('screen-game');
+    subscribeRoom();
+  }, 500);
+}
     if (gameMode==='local') { endLocal(currentTurn); }
     else { endOnline(currentTurn); }
     return;
