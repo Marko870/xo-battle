@@ -83,7 +83,7 @@ async def try_match(app):
             "player_o_name": p2["name"],
             "board": "---------",
             "current_turn": "X",
-            "status": "playing"
+            "status": "waiting"
         }).execute()
         # أرسل للاعبين
         webapp_url = f"{WEBAPP_URL}?room={room_id}"
