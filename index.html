@@ -262,6 +262,24 @@
     <button class="btn btn-danger" id="btn-reset" onclick="resetLocal()" style="display:none;width:auto;padding:8px 20px;font-size:0.85rem;border-radius:10px">إعادة 🔄</button>
   </div>
 
+  <!-- WAITING FOR OPPONENT -->
+  <div class="screen" id="screen-waiting-opponent">
+    <div class="card" style="text-align:center">
+      <div style="font-size:3.5rem;margin-bottom:12px;animation:spin 3s linear infinite">⏳</div>
+      <div class="card-title">ننتظر خصمك...</div>
+      <p style="color:var(--muted);font-size:0.88rem;margin-bottom:16px">
+        شارك رابط البوت مع صديقك ليكتب /play وينضم!
+      </p>
+      <div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:16px">
+        <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px">أنت</div>
+        <div style="font-size:1.8rem">❌</div>
+        <div style="font-size:0.85rem;margin-top:4px" id="waiting-my-name">لاعب 1</div>
+      </div>
+      <div style="color:var(--muted);font-size:0.8rem">سيتم بدء اللعبة تلقائياً لما يجي الخصم 🎮</div>
+    </div>
+    <button class="btn btn-danger" onclick="cancelWaiting()">إلغاء الانتظار ❌</button>
+  </div>
+
   <!-- RESULT -->
   <div class="screen" id="screen-result">
     <div class="result-card">
@@ -406,28 +424,53 @@ setTimeout(async () => {
   try {
     const { data, error } = await sb.from('player_rooms').select('*').eq('telegram_id', myId).single();
     if (error || !data) return;
-    // في غرفة — افتحها تلقائياً
+
     const { data: room } = await sb.from('rooms').select('*').eq('id', data.room_id).single();
     if (!room || room.status === 'finished') {
-      // الغرفة انتهت، امسح السجل
       await sb.from('player_rooms').delete().eq('telegram_id', myId);
       return;
     }
+
     roomId = data.room_id;
     myMark = data.mark;
-    board = room.board.split('').map(c => c === '-' ? '' : c);
-    currentTurn = room.current_turn;
-    gameMode = 'online';
-    gameActive = room.status !== 'finished';
-    document.getElementById('px-name').textContent = room.player_x_name;
-    document.getElementById('po-name').textContent = room.player_o_name;
-    document.getElementById('btn-reset').style.display = 'none';
-    renderBoard(currentTurn !== myMark);
-    updateTurnUI();
-    showScreen('screen-game');
-    subscribeRoom();
+
+    if (room.status === 'waiting') {
+      // ننتظر خصم — أظهر شاشة الانتظار
+      showWaitingForOpponent(room);
+    } else {
+      // اللعبة بدأت
+      startOnlineFromRoom(room);
+    }
   } catch(e) { console.log('No active room'); }
 }, 800);
+
+function showWaitingForOpponent(room) {
+  document.getElementById('waiting-my-name').textContent = myName;
+  showScreen('screen-waiting-opponent');
+  // اشترك بـ Realtime عشان تعرف لما يجي الخصم
+  realtimeSub = sb.channel('room_wait_' + room.id)
+    .on('postgres_changes', { event:'UPDATE', schema:'public', table:'rooms', filter:`id=eq.${room.id}` }, payload => {
+      if (payload.new.status === 'playing') {
+        if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
+        startOnlineFromRoom(payload.new);
+      }
+    })
+    .subscribe();
+}
+
+function startOnlineFromRoom(room) {
+  board = room.board.split('').map(c => c === '-' ? '' : c);
+  currentTurn = room.current_turn;
+  gameMode = 'online';
+  gameActive = room.status !== 'finished';
+  document.getElementById('px-name').textContent = room.player_x_name;
+  document.getElementById('po-name').textContent = room.player_o_name || '⏳';
+  document.getElementById('btn-reset').style.display = 'none';
+  renderBoard(currentTurn !== myMark);
+  updateTurnUI();
+  showScreen('screen-game');
+  subscribeRoom();
+}
     if (gameMode==='local') { endLocal(currentTurn); }
     else { endOnline(currentTurn); }
     return;
@@ -681,6 +724,22 @@ digits.forEach((inp,i) => {
 
 // ── CREATE ROOM BUTTON ──
 document.querySelector('[onclick="showScreen(\'screen-create\')"]').onclick = function() { createRoom(); };
+
+// ── CANCEL WAITING ──
+async function cancelWaiting() {
+  if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
+  // احذف من قائمة الانتظار وامسح الغرفة
+  if (myId) {
+    await sb.from('player_rooms').delete().eq('telegram_id', myId);
+    if (roomId) {
+      await sb.from('waiting_queue').delete().eq('telegram_id', myId);
+      await sb.from('rooms').delete().eq('id', roomId);
+    }
+  }
+  roomId = null; myMark = null; gameMode = null;
+  showToast('✅ تم إلغاء الانتظار');
+  goHome();
+}
 
 // ── TOAST ──
 let toastT;
