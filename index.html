@@ -316,6 +316,11 @@ const tgUser = tg?.initDataUnsafe?.user;
 const myId = tgUser ? String(tgUser.id) : 'local_' + Math.random().toString(36).slice(2,8);
 const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
 
+// Debug — أظهر الـ ID بالشاشة
+setTimeout(() => {
+  showToast('ID: ' + myId + ' | ' + myName);
+}, 1000);
+
 // قراءة الـ room و mark من الرابط تلقائياً
 // لا نعتمد على URL — نقرأ الغرفة من Supabase مباشرة
 let autoRoom = null;
