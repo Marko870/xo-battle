@@ -299,9 +299,9 @@ const myId = tgUser ? String(tgUser.id) : 'local_' + Math.random().toString(36).
 const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
 
 // قراءة الـ room و mark من الرابط تلقائياً
-const urlParams = new URLSearchParams(window.location.search);
-const autoRoom = urlParams.get('room');
-const autoMark = urlParams.get('mark');
+const hashParams = new URLSearchParams(window.location.hash.slice(1));
+const autoRoom = hashParams.get('room');
+const autoMark = hashParams.get('mark');
 
 // ── STATE ──
 let gameMode = null;
@@ -686,4 +686,3 @@ renderBoard(true);
 </script>
 </body>
 </html>
-
