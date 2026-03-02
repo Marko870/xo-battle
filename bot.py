@@ -70,40 +70,53 @@ async def try_match(app):
     if len(queue.data) >= 2:
         p1 = queue.data[0]
         p2 = queue.data[1]
+
+        # الغرفة موجودة بالفعل عند p1 — فقط أضف p2 عليها
+        room_id = p1.get("room_id")
+        if not room_id:
+            return
+
         # احذف من القائمة
         sb.from_("waiting_queue").delete().in_("telegram_id", [p1["telegram_id"], p2["telegram_id"]]).execute()
-        # أنشئ غرفة في Supabase
-        import random
-        room_id = str(random.randint(1000, 9999))
-        sb.from_("rooms").insert({
-            "id": room_id,
-            "player_x_id": p1["telegram_id"],
-            "player_x_name": p1["name"],
+
+        # أضف p2 للغرفة وغير الحالة لـ playing
+        sb.from_("rooms").update({
             "player_o_id": p2["telegram_id"],
             "player_o_name": p2["name"],
-            "board": "---------",
-            "current_turn": "X",
             "status": "playing"
-        }).execute()
-        # احفظ غرفة كل لاعب بـ Supabase
-        sb.from_("player_rooms").upsert({"telegram_id": p1["telegram_id"], "room_id": room_id, "mark": "X"}).execute()
+        }).eq("id", room_id).execute()
+
+        # احفظ p2 بـ player_rooms
         sb.from_("player_rooms").upsert({"telegram_id": p2["telegram_id"], "room_id": room_id, "mark": "O"}).execute()
 
-        # أرسل للاعبين
-        for player, mark_emoji in [(p1, "❌"), (p2, "⭕")]:
-            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة مباشرة", web_app=WebAppInfo(url=WEBAPP_URL))]]
-            try:
-                await app.bot.send_message(
-                    chat_id=int(player["telegram_id"]),
-                    text=f"🎮 *وجدنا لك خصم!*\n\n"
-                         f"أنت: {mark_emoji}\n"
-                         f"الخصم: {p2['name'] if player == p1 else p1['name']}\n\n"
-                         f"اضغط الزر لتبدأ اللعبة مباشرة! 👇",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logger.error(f"Match notify error: {e}")
+        # أرسل إشعار للاعب 1 إن الخصم وصل
+        try:
+            keyboard = [[InlineKeyboardButton("🎮 العب الآن", web_app=WebAppInfo(url=WEBAPP_URL))]]
+            await app.bot.send_message(
+                chat_id=int(p1["telegram_id"]),
+                text=f"🎮 *وصل خصمك!*\n\n"
+                     f"الخصم: *{p2['name']}*\n"
+                     f"اضغط للعب! 👇",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"P1 notify error: {e}")
+
+        # أرسل إشعار للاعب 2
+        try:
+            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
+            await app.bot.send_message(
+                chat_id=int(p2["telegram_id"]),
+                text=f"🎮 *وجدنا لك خصم!*\n\n"
+                     f"أنت: ⭕\n"
+                     f"الخصم: *{p1['name']}*\n\n"
+                     f"اضغط لتبدأ اللعبة! 👇",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"P2 notify error: {e}")
 
 # ── COMMANDS ──
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,19 +187,48 @@ async def play_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # تحقق إذا بالانتظار
-    in_queue = sb.from_("waiting_queue").select("telegram_id").eq("telegram_id", uid).execute()
+    in_queue = sb.from_("waiting_queue").select("*").eq("telegram_id", uid).execute()
     if in_queue.data:
-        await update.message.reply_text("⏳ أنت بالفعل في قائمة الانتظار!")
+        # عنده غرفة بالانتظار — أرسله رابط اللعبة
+        room_id = in_queue.data[0].get("room_id")
+        if room_id:
+            keyboard = [[InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
+            await update.message.reply_text(
+                "⏳ *لسا ننتظر خصم...*\n\nافتح اللعبة وانتظر 👇",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("⏳ أنت بالفعل في قائمة الانتظار!")
         return
 
-    # خصم الرسوم وأضف للانتظار
+    # خصم الرسوم
     await deduct_balance(uid, name, MATCH_FEE, "رسوم مباراة XO")
-    sb.from_("waiting_queue").insert({"telegram_id": uid, "name": name}).execute()
 
+    # أنشئ غرفة فوراً وحط اللاعب فيها كـ X
+    import random
+    room_id = str(random.randint(1000, 9999))
+    sb.from_("rooms").insert({
+        "id": room_id,
+        "player_x_id": uid,
+        "player_x_name": name,
+        "board": "---------",
+        "current_turn": "X",
+        "status": "waiting"
+    }).execute()
+
+    # احفظ بقائمة الانتظار مع room_id
+    sb.from_("waiting_queue").insert({"telegram_id": uid, "name": name, "room_id": room_id}).execute()
+
+    # احفظ بـ player_rooms
+    sb.from_("player_rooms").upsert({"telegram_id": uid, "room_id": room_id, "mark": "X"}).execute()
+
+    keyboard = [[InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
         f"✅ *تم خصم {MATCH_FEE}$*\n"
         f"رصيدك الجديد: `{bal - MATCH_FEE:.2f}$`\n\n"
-        "⏳ ننتظر خصم لك... سيتم إشعارك فوراً! 🎮",
+        "⏳ افتح اللعبة وانتظر خصمك! 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
@@ -563,4 +605,3 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
     app.run_polling()
-
