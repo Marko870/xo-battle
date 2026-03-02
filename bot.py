@@ -83,19 +83,19 @@ async def try_match(app):
             "player_o_name": p2["name"],
             "board": "---------",
             "current_turn": "X",
-            "status": "waiting"
+            "status": "playing"
         }).execute()
-        # أرسل للاعبين
-        webapp_url = f"{WEBAPP_URL}?room={room_id}"
-        for player, mark in [(p1, "❌"), (p2, "⭕")]:
-            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
+        # أرسل للاعبين — كل لاعب يحصل على رابط مباشر مع الكود والدور
+        for player, mark_emoji, mark_letter in [(p1, "❌", "X"), (p2, "⭕", "O")]:
+            direct_url = f"{WEBAPP_URL}?room={room_id}&mark={mark_letter}"
+            keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة مباشرة", web_app=WebAppInfo(url=direct_url))]]
             try:
                 await app.bot.send_message(
                     chat_id=int(player["telegram_id"]),
                     text=f"🎮 *وجدنا لك خصم!*\n\n"
-                         f"أنت: {mark}\n"
-                         f"كود الغرفة: `{room_id}`\n\n"
-                         f"افتح اللعبة وادخل الكود 👇",
+                         f"أنت: {mark_emoji}\n"
+                         f"الخصم: {p2['name'] if mark_letter == 'X' else p1['name']}\n\n"
+                         f"اضغط الزر لتبدأ اللعبة مباشرة! 👇",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="Markdown"
                 )
