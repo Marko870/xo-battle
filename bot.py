@@ -87,7 +87,7 @@ async def try_match(app):
         }).execute()
         # أرسل للاعبين — كل لاعب يحصل على رابط مباشر مع الكود والدور
         for player, mark_emoji, mark_letter in [(p1, "❌", "X"), (p2, "⭕", "O")]:
-            direct_url = f"{WEBAPP_URL}?room={room_id}&mark={mark_letter}"
+            direct_url = f"{WEBAPP_URL}#room={room_id}&mark={mark_letter}"
             keyboard = [[InlineKeyboardButton("🎮 ابدأ اللعبة مباشرة", web_app=WebAppInfo(url=direct_url))]]
             try:
                 await app.bot.send_message(
