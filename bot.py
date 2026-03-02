@@ -200,6 +200,7 @@ async def play_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text("⏳ أنت بالفعل في قائمة الانتظار!")
+        await try_match(context.application)
         return
 
     # خصم الرسوم
@@ -605,3 +606,4 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
     app.run_polling()
+
