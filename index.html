@@ -412,17 +412,6 @@ function resetLocal() {
   renderBoard(false); updateTurnUI();
 }
 
-function handleMove(i) {
-  if (!gameActive || board[i]) return;
-  if (gameMode==='online' && currentTurn!==myMark) { showToast('⏳ انتظر دورك!'); return; }
-
-  board[i] = currentTurn;
-  renderBoard(gameMode==='online');
-  animateMark(i);
-
-  if (checkWin(board, currentTurn)) {
-    renderBoard(true);
-
 // لما الـ WebApp يفتح، تحقق إذا في غرفة نشطة لهاللاعب
 setTimeout(async () => {
   if (!myId || myId.startsWith('local_')) return;
@@ -440,10 +429,8 @@ setTimeout(async () => {
     myMark = data.mark;
 
     if (room.status === 'waiting') {
-      // ننتظر خصم — أظهر شاشة الانتظار
       showWaitingForOpponent(room);
     } else {
-      // اللعبة بدأت
       startOnlineFromRoom(room);
     }
   } catch(e) { console.log('No active room'); }
@@ -452,7 +439,6 @@ setTimeout(async () => {
 function showWaitingForOpponent(room) {
   document.getElementById('waiting-my-name').textContent = myName;
   showScreen('screen-waiting-opponent');
-  // اشترك بـ Realtime عشان تعرف لما يجي الخصم
   realtimeSub = sb.channel('room_wait_' + room.id)
     .on('postgres_changes', { event:'UPDATE', schema:'public', table:'rooms', filter:`id=eq.${room.id}` }, payload => {
       if (payload.new.status === 'playing') {
@@ -476,6 +462,17 @@ function startOnlineFromRoom(room) {
   showScreen('screen-game');
   subscribeRoom();
 }
+
+function handleMove(i) {
+  if (!gameActive || board[i]) return;
+  if (gameMode==='online' && currentTurn!==myMark) { showToast('⏳ انتظر دورك!'); return; }
+
+  board[i] = currentTurn;
+  renderBoard(gameMode==='online');
+  animateMark(i);
+
+  if (checkWin(board, currentTurn)) {
+    renderBoard(true);
     if (gameMode==='local') { endLocal(currentTurn); }
     else { endOnline(currentTurn); }
     return;
@@ -758,4 +755,3 @@ renderBoard(true);
 </script>
 </body>
 </html>
-
