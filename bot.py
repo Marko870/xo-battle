@@ -464,14 +464,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
             return
-        in_queue = sb.from_("waiting_queue").select("telegram_id").eq("telegram_id", uid).execute()
+        in_queue = sb.from_("waiting_queue").select("*").eq("telegram_id", uid).execute()
         if in_queue.data:
-            await query.message.reply_text("⏳ أنت بالفعل في قائمة الانتظار!")
+            room_id = in_queue.data[0].get("room_id")
+            if room_id:
+                keyboard = [[InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
+                await query.message.reply_text(
+                    "⏳ *لسا ننتظر خصم...*\n\nافتح اللعبة وانتظر 👇",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.message.reply_text("⏳ أنت بالفعل في قائمة الانتظار!")
+            await try_match(context.application)
             return
         await deduct_balance(uid, name, MATCH_FEE, "رسوم مباراة XO")
-        sb.from_("waiting_queue").insert({"telegram_id": uid, "name": name}).execute()
+        import random
+        room_id = str(random.randint(1000, 9999))
+        sb.from_("rooms").insert({
+            "id": room_id, "player_x_id": uid, "player_x_name": name,
+            "board": "---------", "current_turn": "X", "status": "waiting"
+        }).execute()
+        sb.from_("waiting_queue").insert({"telegram_id": uid, "name": name, "room_id": room_id}).execute()
+        sb.from_("player_rooms").upsert({"telegram_id": uid, "room_id": room_id, "mark": "X"}).execute()
+        keyboard = [[InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))]]
         await query.message.reply_text(
-            f"✅ تم خصم `{MATCH_FEE}$`\n⏳ ننتظر خصم... سيتم إشعارك فوراً! 🎮",
+            f"✅ تم خصم `{MATCH_FEE}$`\n⏳ افتح اللعبة وانتظر خصمك! 👇",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
         await try_match(context.application)
@@ -606,4 +625,3 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
     app.run_polling()
-
