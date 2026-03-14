@@ -888,6 +888,7 @@ async def tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining = TOURNAMENT_SIZE - new_count
         await update.message.reply_text(
             f"✅ *تم تسجيلك بالبطولة!*\n\nأنت اللاعب `{new_count}` من `{TOURNAMENT_SIZE}`\nننتظر `{remaining}` لاعب آخر...\n\nسيتم إشعارك عند البدء! 🔔",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 شاهد اللاعبين", web_app=WebAppInfo(url=WEBAPP_URL))]]),
             parse_mode="Markdown"
         )
 
