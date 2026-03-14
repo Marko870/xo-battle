@@ -599,8 +599,584 @@ async def check_new_results(app):
             logger.error(f"Results check error: {e}")
         await asyncio.sleep(3)
 
+
+# ══════════════════════════════════════════
+# ── TOURNAMENT SYSTEM ──
+# ══════════════════════════════════════════
+
+TOURNAMENT_FEE    = 1.0
+TOURNAMENT_SIZE   = 8
+PRIZE_1ST         = 4.0
+PRIZE_2ND         = 2.0
+PRIZE_3RD         = 0.5   # لكل من 3rd و 4th
+OWNER_CUT         = 1.0
+MATCH_TIMEOUT_MIN = 10
+REMINDER_MIN      = 5
+
+ROUNDS = {
+    "round_1": "ربع النهائي",
+    "round_2": "نصف النهائي",
+    "final":   "النهائي"
+}
+
+def get_next_round(current):
+    order = ["round_1", "round_2", "final"]
+    idx = order.index(current)
+    return order[idx + 1] if idx + 1 < len(order) else None
+
+async def get_active_tournament():
+    res = sb.from_("tournaments").select("*").neq("status", "finished").order("id", desc=True).limit(1).execute()
+    return res.data[0] if res.data else None
+
+async def notify_all_tournament_players(app, tournament_id: int, text: str, keyboard=None):
+    players = sb.from_("tournament_players").select("telegram_id").eq("tournament_id", tournament_id).neq("status", "eliminated").execute()
+    for p in players.data:
+        try:
+            await app.bot.send_message(
+                chat_id=int(p["telegram_id"]),
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Notify error {p['telegram_id']}: {e}")
+
+async def start_round(app, tournament_id: int, round_name: str):
+    import random
+    # جمع اللاعبين النشيطين
+    players = sb.from_("tournament_players").select("*").eq("tournament_id", tournament_id).eq("status", "active").execute()
+    active = players.data
+    random.shuffle(active)
+
+    # تحديث حالة البطولة
+    sb.from_("tournaments").update({"current_round": round_name}).eq("id", tournament_id).execute()
+
+    round_label = ROUNDS.get(round_name, round_name)
+    await notify_all_tournament_players(app, tournament_id, f"🏆 *{round_label} بدأ!*
+
+سيصلك رابط مباراتك خلال ثوانٍ... ⚔️")
+
+    # إنشاء مباريات
+    for i in range(0, len(active), 2):
+        p1 = active[i]
+        p2 = active[i + 1]
+        match_num = (i // 2) + 1
+
+        room_id = str(random.randint(10000, 99999))
+        sb.from_("rooms").insert({
+            "id": room_id,
+            "player_x_id": p1["telegram_id"],
+            "player_x_name": p1["name"],
+            "player_o_id": p2["telegram_id"],
+            "player_o_name": p2["name"],
+            "board": "---------",
+            "current_turn": "X",
+            "status": "playing"
+        }).execute()
+
+        match = sb.from_("tournament_matches").insert({
+            "tournament_id": tournament_id,
+            "round": round_name,
+            "match_number": match_num,
+            "p1_id": p1["telegram_id"],
+            "p1_name": p1["name"],
+            "p2_id": p2["telegram_id"],
+            "p2_name": p2["name"],
+            "room_id": room_id,
+            "status": "playing",
+            "started_at": "now()"
+        }).execute()
+
+        match_id = match.data[0]["id"]
+
+        # احفظ الغرفة لكل لاعب
+        sb.from_("player_rooms").upsert({"telegram_id": p1["telegram_id"], "room_id": room_id, "mark": "X"}).execute()
+        sb.from_("player_rooms").upsert({"telegram_id": p2["telegram_id"], "room_id": room_id, "mark": "O"}).execute()
+
+        # أرسل للاعبين
+        for player, mark_emoji, opponent in [(p1, "❌", p2["name"]), (p2, "⭕", p1["name"])]:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎮 افتح مباراتك", web_app=WebAppInfo(url=WEBAPP_URL))]])
+            try:
+                await app.bot.send_message(
+                    chat_id=int(player["telegram_id"]),
+                    text=f"⚔️ *{round_label}*
+
+"
+                         f"أنت: {mark_emoji}
+"
+                         f"الخصم: *{opponent}*
+
+"
+                         f"⏰ عندك {MATCH_TIMEOUT_MIN} دقائق!
+"
+                         f"افتح اللعبة الآن 👇",
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Match notify error: {e}")
+
+        # شغّل timer للمباراة
+        asyncio.create_task(match_timer(app, match_id, room_id, p1["telegram_id"], p2["telegram_id"], tournament_id, round_name))
+
+async def match_timer(app, match_id: int, room_id: str, p1_id: str, p2_id: str, tournament_id: int, round_name: str):
+    # تذكير بعد REMINDER_MIN دقائق
+    await asyncio.sleep(REMINDER_MIN * 60)
+    match = sb.from_("tournament_matches").select("status").eq("id", match_id).execute()
+    if match.data and match.data[0]["status"] == "playing":
+        for uid in [p1_id, p2_id]:
+            try:
+                await app.bot.send_message(
+                    chat_id=int(uid),
+                    text=f"⚠️ *تذكير!*
+
+باقي {MATCH_TIMEOUT_MIN - REMINDER_MIN} دقائق على انتهاء الوقت!
+افتح اللعبة الآن! 🎮",
+                    parse_mode="Markdown"
+                )
+            except: pass
+
+    # انتظر باقي الوقت
+    await asyncio.sleep((MATCH_TIMEOUT_MIN - REMINDER_MIN) * 60)
+
+    # تحقق إذا المباراة لسا شغالة
+    match = sb.from_("tournament_matches").select("*").eq("id", match_id).execute()
+    if not match.data or match.data[0]["status"] != "playing":
+        return
+
+    m = match.data[0]
+    # تحقق من الغرفة
+    room = sb.from_("rooms").select("*").eq("id", room_id).execute()
+    winner_id = None
+
+    if room.data:
+        r = room.data[0]
+        x_moved = r["board"] != "---------"
+        # إذا أحدهم لعب والثاني لا → الآخر يخسر
+        # هنا نعتمد على board — نشوف مين لعب أكثر
+        x_count = r["board"].count("X")
+        o_count = r["board"].count("O")
+        if x_count > o_count:
+            winner_id = p1_id  # X لعب أكثر
+        elif o_count > x_count:
+            winner_id = p2_id
+        else:
+            import random
+            winner_id = random.choice([p1_id, p2_id])
+    else:
+        import random
+        winner_id = random.choice([p1_id, p2_id])
+
+    loser_id = p2_id if winner_id == p1_id else p1_id
+
+    # سجل النتيجة
+    sb.from_("tournament_matches").update({
+        "winner_id": winner_id,
+        "status": "timeout",
+        "finished_at": "now()"
+    }).eq("id", match_id).execute()
+
+    # إشعار
+    winner_name = m["p1_name"] if winner_id == p1_id else m["p2_name"]
+    try:
+        await app.bot.send_message(chat_id=int(winner_id), text="⏰ *انتهى الوقت!*
+
+أنت تعدّيت للدور التالي بسبب انتهاء وقت خصمك! 🏆", parse_mode="Markdown")
+    except: pass
+    try:
+        await app.bot.send_message(chat_id=int(loser_id), text="⏰ *انتهى الوقت!*
+
+خسرت بسبب انتهاء الوقت. حظ أحسن المرة الجاية! 😔", parse_mode="Markdown")
+    except: pass
+
+    await check_round_complete(app, tournament_id, round_name)
+
+async def check_round_complete(app, tournament_id: int, round_name: str):
+    # تحقق إذا كل مباريات الدور انتهت
+    all_matches = sb.from_("tournament_matches").select("*").eq("tournament_id", tournament_id).eq("round", round_name).execute()
+    if not all_matches.data:
+        return
+
+    pending = [m for m in all_matches.data if m["status"] in ("playing", "pending")]
+    if pending:
+        return  # لسا في مباريات شغالة
+
+    # كل المباريات انتهت — جمع الفائزين
+    winners = [m["winner_id"] for m in all_matches.data if m["winner_id"]]
+
+    # حدّث حالة اللاعبين
+    all_player_ids = []
+    for m in all_matches.data:
+        all_player_ids.extend([m["p1_id"], m["p2_id"]])
+
+    for pid in all_player_ids:
+        if pid in winners:
+            sb.from_("tournament_players").update({"status": "active"}).eq("tournament_id", tournament_id).eq("telegram_id", pid).execute()
+        else:
+            sb.from_("tournament_players").update({"status": "eliminated", "eliminated_round": round_name}).eq("tournament_id", tournament_id).eq("telegram_id", pid).execute()
+
+    # امسح player_rooms للخاسرين
+    losers = [pid for pid in all_player_ids if pid not in winners]
+    for pid in losers:
+        sb.from_("player_rooms").delete().eq("telegram_id", pid).execute()
+
+    # إشعار الخاسرين من نصف النهائي بجائزة 3rd
+    if round_name == "round_2":
+        for pid in losers:
+            player = sb.from_("tournament_players").select("name").eq("tournament_id", tournament_id).eq("telegram_id", pid).execute()
+            pname = player.data[0]["name"] if player.data else "لاعب"
+            await add_balance(pid, pname, PRIZE_3RD, "جائزة المركز 3/4 - بطولة XO")
+            try:
+                await app.bot.send_message(
+                    chat_id=int(pid),
+                    text=f"🥉 *وصلت للمركز الثالث!*
+
+جائزتك: `+{PRIZE_3RD}$` 🎉",
+                    parse_mode="Markdown"
+                )
+            except: pass
+
+    next_round = get_next_round(round_name)
+
+    if next_round:
+        round_label = ROUNDS.get(next_round, next_round)
+        await asyncio.sleep(5)
+        await notify_all_tournament_players(app, tournament_id,
+            f"✅ *انتهى {ROUNDS[round_name]}!*
+
+{round_label} سيبدأ خلال 30 ثانية... 🏆")
+        await asyncio.sleep(30)
+        await start_round(app, tournament_id, next_round)
+    else:
+        # انتهت البطولة
+        await finish_tournament(app, tournament_id, winners)
+
+async def finish_tournament(app, tournament_id: int, finalists: list):
+    # جمع نتيجة النهائي
+    final_match = sb.from_("tournament_matches").select("*").eq("tournament_id", tournament_id).eq("round", "final").execute()
+    if not final_match.data:
+        return
+
+    m = final_match.data[0]
+    winner_id = m["winner_id"]
+    loser_id = m["p2_id"] if winner_id == m["p1_id"] else m["p1_id"]
+
+    winner_name = m["p1_name"] if winner_id == m["p1_id"] else m["p2_name"]
+    loser_name = m["p2_name"] if winner_id == m["p1_id"] else m["p1_name"]
+
+    # توزيع الجوائز
+    await add_balance(winner_id, winner_name, PRIZE_1ST, "جائزة المركز الأول 🥇 - بطولة XO")
+    await add_balance(loser_id, loser_name, PRIZE_2ND, "جائزة المركز الثاني 🥈 - بطولة XO")
+    await add_balance(str(ADMIN_ID), "Admin", OWNER_CUT, "ربح بطولة XO")
+
+    # إشعار الفائزين
+    try:
+        await app.bot.send_message(
+            chat_id=int(winner_id),
+            text=f"🥇 *مبروك! أنت بطل البطولة!*
+
+جائزتك: `+{PRIZE_1ST}$` 🏆
+
+أحسنت! 🌟",
+            parse_mode="Markdown"
+        )
+    except: pass
+    try:
+        await app.bot.send_message(
+            chat_id=int(loser_id),
+            text=f"🥈 *أحسنت! وصلت للنهائي!*
+
+جائزتك: `+{PRIZE_2ND}$` 🎉",
+            parse_mode="Markdown"
+        )
+    except: pass
+
+    # تحديث حالة البطولة
+    sb.from_("tournaments").update({"status": "finished", "finished_at": "now()"}).eq("id", tournament_id).execute()
+
+    # إنشاء بطولة جديدة فارغة
+    sb.from_("tournaments").insert({"status": "waiting", "current_round": "waiting"}).execute()
+
+    # إشعار الكل
+    await notify_all_tournament_players(app, tournament_id,
+        f"🏆 *انتهت البطولة!*
+
+"
+        f"🥇 البطل: *{winner_name}*
+"
+        f"🥈 الوصيف: *{loser_name}*
+
+"
+        f"شكراً للجميع! 🎮
+"
+        f"سجّل بالبطولة الجديدة: /tournament"
+    )
+
+# ── TOURNAMENT COMMANDS ──
+async def tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    uid = str(user.id)
+    name = user.first_name
+
+    tournament = await get_active_tournament()
+
+    if not tournament:
+        await update.message.reply_text("❌ لا يوجد بطولة حالياً. تواصل مع الأدمن.")
+        return
+
+    t_id = tournament["id"]
+    t_status = tournament["status"]
+
+    # إذا البطولة شغالة
+    if t_status not in ("waiting",):
+        round_label = ROUNDS.get(t_status, t_status)
+        await update.message.reply_text(
+            f"⚔️ *بطولة جارية حالياً!*
+
+"
+            f"المرحلة: *{round_label}*
+
+"
+            f"انتظر انتهاءها للتسجيل بالبطولة الجديدة.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # تحقق إذا مسجل
+    existing = sb.from_("tournament_players").select("id").eq("tournament_id", t_id).eq("telegram_id", uid).execute()
+    if existing.data:
+        count = tournament["registered_count"]
+        await update.message.reply_text(
+            f"✅ *أنت مسجل بالفعل!*
+
+"
+            f"اللاعبون: `{count}/{TOURNAMENT_SIZE}`
+
+"
+            f"انتظر اكتمال العدد... ⏳",
+            parse_mode="Markdown"
+        )
+        return
+
+    # تحقق من الرصيد
+    bal = await get_balance(uid)
+    if bal < TOURNAMENT_FEE:
+        await update.message.reply_text(
+            f"❌ *رصيدك غير كافٍ!*
+
+"
+            f"رصيدك: `{bal:.2f}$`
+"
+            f"رسوم البطولة: `{TOURNAMENT_FEE}$`
+
+"
+            "اشحن رصيدك: /deposit",
+            parse_mode="Markdown"
+        )
+        return
+
+    # تسجيل اللاعب
+    await deduct_balance(uid, name, TOURNAMENT_FEE, "رسوم بطولة XO")
+    sb.from_("tournament_players").insert({
+        "tournament_id": t_id,
+        "telegram_id": uid,
+        "name": name,
+        "status": "active"
+    }).execute()
+
+    new_count = tournament["registered_count"] + 1
+    sb.from_("tournaments").update({
+        "registered_count": new_count,
+        "prize_pool": tournament["prize_pool"] + TOURNAMENT_FEE
+    }).eq("id", t_id).execute()
+
+    # إشعار الكل
+    await notify_all_tournament_players(context.application, t_id,
+        f"🎮 *انضم {name} للبطولة!*
+
+"
+        f"اللاعبون: `{new_count}/{TOURNAMENT_SIZE}`
+"
+        f"{'⏳ ننتظر المزيد...' if new_count < TOURNAMENT_SIZE else '🔥 اكتمل العدد!'}"
+    )
+
+    if new_count >= TOURNAMENT_SIZE:
+        # ابدأ البطولة بعد 60 ثانية
+        sb.from_("tournaments").update({"status": "round_1"}).eq("id", t_id).execute()
+        await update.message.reply_text(
+            f"🏆 *اكتمل العدد! البطولة ستبدأ بعد 60 ثانية!*
+
+"
+            f"استعد! ⚔️",
+            parse_mode="Markdown"
+        )
+        asyncio.create_task(delayed_start(context.application, t_id))
+    else:
+        remaining = TOURNAMENT_SIZE - new_count
+        await update.message.reply_text(
+            f"✅ *تم تسجيلك بالبطولة!*
+
+"
+            f"أنت اللاعب `{new_count}` من `{TOURNAMENT_SIZE}`
+"
+            f"ننتظر `{remaining}` لاعب آخر...
+
+"
+            f"سيتم إشعارك عند البدء! 🔔",
+            parse_mode="Markdown"
+        )
+
+async def delayed_start(app, tournament_id: int):
+    await asyncio.sleep(60)
+    await start_round(app, tournament_id, "round_1")
+
+async def bracket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tournament = await get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ لا يوجد بطولة حالياً.")
+        return
+
+    t_id = tournament["id"]
+    matches = sb.from_("tournament_matches").select("*").eq("tournament_id", t_id).order("round").order("match_number").execute()
+
+    if not matches.data:
+        count = tournament["registered_count"]
+        await update.message.reply_text(
+            f"⏳ *البطولة في مرحلة التسجيل*
+
+"
+            f"اللاعبون: `{count}/{TOURNAMENT_SIZE}`
+
+"
+            f"سجّل الآن: /tournament",
+            parse_mode="Markdown"
+        )
+        return
+
+    text = "🏆 *جدول البطولة:*
+
+"
+    current_round = ""
+    for m in matches.data:
+        if m["round"] != current_round:
+            current_round = m["round"]
+            text += f"
+*{ROUNDS.get(current_round, current_round)}:*
+"
+        winner = f"✅ {m['p1_name']}" if m["winner_id"] == m["p1_id"] else f"✅ {m['p2_name']}" if m["winner_id"] else "⏳ جارية"
+        text += f"  {m['p1_name']} ⚔️ {m['p2_name']} → {winner}
+"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ── ADMIN TOURNAMENT COMMANDS ──
+async def start_tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    tournament = await get_active_tournament()
+    if not tournament or tournament["status"] != "waiting":
+        await update.message.reply_text("❌ لا يوجد بطولة في مرحلة التسجيل.")
+        return
+    count = tournament["registered_count"]
+    if count < 2:
+        await update.message.reply_text(f"❌ يحتاج على الأقل لاعبين! حالياً: {count}")
+        return
+    # لو العدد فردي، احذف الأخير وارجع له ماله
+    if count % 2 != 0:
+        last = sb.from_("tournament_players").select("*").eq("tournament_id", tournament["id"]).eq("status", "active").order("registered_at", desc=True).limit(1).execute()
+        if last.data:
+            p = last.data[0]
+            await add_balance(p["telegram_id"], p["name"], TOURNAMENT_FEE, "إرجاع — عدد فردي بالبطولة")
+            sb.from_("tournament_players").delete().eq("id", p["id"]).execute()
+            sb.from_("tournaments").update({"registered_count": count - 1}).eq("id", tournament["id"]).execute()
+            try:
+                await context.bot.send_message(chat_id=int(p["telegram_id"]), text="😔 تم إرجاع رسومك — العدد فردي وتم بدء البطولة يدوياً.", parse_mode="Markdown")
+            except: pass
+    sb.from_("tournaments").update({"status": "round_1"}).eq("id", tournament["id"]).execute()
+    await update.message.reply_text(f"✅ تم بدء البطولة يدوياً بـ {count} لاعبين!")
+    asyncio.create_task(delayed_start(context.application, tournament["id"]))
+
+async def cancel_tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    tournament = await get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ لا يوجد بطولة نشطة.")
+        return
+    # إرجاع المبالغ للجميع
+    players = sb.from_("tournament_players").select("*").eq("tournament_id", tournament["id"]).execute()
+    for p in players.data:
+        await add_balance(p["telegram_id"], p["name"], TOURNAMENT_FEE, "إرجاع — إلغاء البطولة")
+        try:
+            await context.bot.send_message(chat_id=int(p["telegram_id"]), text="❌ *تم إلغاء البطولة*
+
+تم إرجاع رسوم التسجيل إلى رصيدك. 💰", parse_mode="Markdown")
+        except: pass
+    sb.from_("tournaments").update({"status": "finished", "finished_at": "now()"}).eq("id", tournament["id"]).execute()
+    sb.from_("tournaments").insert({"status": "waiting", "current_round": "waiting"}).execute()
+    await update.message.reply_text("✅ تم إلغاء البطولة وإرجاع كل المبالغ.")
+
+async def tournament_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    tournament = await get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ لا يوجد بطولة نشطة.")
+        return
+    players = sb.from_("tournament_players").select("*").eq("tournament_id", tournament["id"]).execute()
+    active = [p for p in players.data if p["status"] == "active"]
+    text = (
+        f"📊 *حالة البطولة:*
+
+"
+        f"الحالة: `{tournament['status']}`
+"
+        f"المرحلة: `{tournament['current_round']}`
+"
+        f"المسجلون: `{tournament['registered_count']}/{TOURNAMENT_SIZE}`
+"
+        f"النشطون: `{len(active)}`
+"
+        f"الجائزة الكلية: `{tournament['prize_pool']}$`
+
+"
+        f"اللاعبون النشطون:
+"
+    )
+    for p in active:
+        text += f"• {p['name']}
+"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ── متابعة نتائج مباريات البطولة ──
+async def check_tournament_results(app):
+    while True:
+        try:
+            # تحقق من مباريات البطولة الشغالة
+            active_matches = sb.from_("tournament_matches").select("*").eq("status", "playing").execute()
+            for m in active_matches.data:
+                room = sb.from_("rooms").select("*").eq("id", m["room_id"]).execute()
+                if not room.data:
+                    continue
+                r = room.data[0]
+                if r["status"] == "finished" and r.get("winner"):
+                    winner_id = r["player_x_id"] if r["winner"] == "X" else r["player_o_id"]
+                    sb.from_("tournament_matches").update({
+                        "winner_id": winner_id,
+                        "status": "finished",
+                        "finished_at": "now()"
+                    }).eq("id", m["id"]).execute()
+                    # امسح player_rooms للخاسر
+                    loser_id = r["player_o_id"] if winner_id == r["player_x_id"] else r["player_x_id"]
+                    sb.from_("player_rooms").delete().eq("telegram_id", loser_id).execute()
+                    await check_round_complete(app, m["tournament_id"], m["round"])
+        except Exception as e:
+            logger.error(f"Tournament results check error: {e}")
+        await asyncio.sleep(5)
+
 async def post_init(app):
     asyncio.create_task(check_new_results(app))
+    asyncio.create_task(check_tournament_results(app))
 
 # ── MAIN ──
 if __name__ == "__main__":
@@ -620,8 +1196,15 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("allplayers", allplayers_cmd))
     app.add_handler(CommandHandler("pending", pending_cmd))
     app.add_handler(CommandHandler("queue", queue_cmd))
+    # بطولة
+    app.add_handler(CommandHandler("tournament", tournament_cmd))
+    app.add_handler(CommandHandler("bracket", bracket_cmd))
+    app.add_handler(CommandHandler("start_tournament", start_tournament_cmd))
+    app.add_handler(CommandHandler("cancel_tournament", cancel_tournament_cmd))
+    app.add_handler(CommandHandler("tournament_status", tournament_status_cmd))
     # callbacks وصور
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
     app.run_polling()
+
