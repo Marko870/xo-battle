@@ -172,6 +172,57 @@
   .divider::before,.divider::after { content:''; flex:1; height:1px; background:#1e1e30; }
 
   @keyframes fadeIn { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+  /* Tournament */
+  .t-player-slot {
+    background: var(--surface);
+    border-radius: 14px;
+    padding: 10px 6px;
+    text-align: center;
+    border: 1.5px solid #1e1e30;
+    transition: all 0.3s;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .t-player-slot.filled {
+    border-color: var(--accent);
+    background: rgba(123,47,255,0.1);
+  }
+  .t-player-slot.filled.me {
+    border-color: var(--o-color);
+    background: rgba(76,201,240,0.1);
+  }
+  .t-player-avatar {
+    font-size: 1.6rem;
+    line-height: 1;
+  }
+  .t-player-name {
+    font-size: 0.68rem;
+    color: var(--text);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: 100%;
+    max-width: 70px;
+  }
+  .t-player-empty {
+    font-size: 1.4rem;
+    opacity: 0.3;
+  }
+  .t-player-num {
+    font-size: 0.6rem;
+    color: var(--muted);
+  }
+  @keyframes slotFill {
+    0% { transform: scale(0.8); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .t-player-slot.filled { animation: slotFill 0.4s ease; }
+
   .screen.active > * { animation:fadeIn 0.35s ease both; }
   .screen.active > *:nth-child(1){animation-delay:0s}
   .screen.active > *:nth-child(2){animation-delay:0.05s}
@@ -206,6 +257,11 @@
     <div class="mode-card" onclick="showLeaderboard()">
       <div class="mode-icon">🏆</div>
       <div class="mode-info"><div class="mode-title">المتصدرون</div><div class="mode-desc">أفضل اللاعبين</div></div>
+    </div>
+    <div class="divider">بطولة</div>
+    <div class="mode-card" onclick="showTournament()">
+      <div class="mode-icon">⚔️</div>
+      <div class="mode-info"><div class="mode-title">بطولة XO</div><div class="mode-desc">8 لاعبين • جائزة 4$</div></div>
     </div>
   </div>
 
@@ -291,6 +347,50 @@
     </div>
   </div>
 
+  <!-- TOURNAMENT -->
+  <div class="screen" id="screen-tournament">
+    <div class="card" style="padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div class="card-title" style="margin:0">⚔️ بطولة XO Battle</div>
+        <div id="t-status-badge" style="font-size:0.75rem;padding:4px 10px;border-radius:20px;background:rgba(123,47,255,0.2);color:#a855f7">⏳ تسجيل</div>
+      </div>
+      <!-- جائزة -->
+      <div style="display:flex;justify-content:space-around;margin-bottom:20px;background:var(--surface);border-radius:14px;padding:12px">
+        <div style="text-align:center">
+          <div style="font-size:1.3rem">🥇</div>
+          <div style="font-size:0.9rem;font-weight:700;color:#ffd700">4$</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:1.3rem">🥈</div>
+          <div style="font-size:0.9rem;font-weight:700;color:#c0c0c0">2$</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:1.3rem">🥉</div>
+          <div style="font-size:0.9rem;font-weight:700;color:#cd7f32">0.5$</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:1rem">💰</div>
+          <div style="font-size:0.75rem;color:var(--muted)">1$ دخول</div>
+        </div>
+      </div>
+      <!-- اللاعبين -->
+      <div id="tournament-players-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+      </div>
+      <!-- شريط التقدم -->
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:0.8rem;color:var(--muted);margin-bottom:6px">
+          <span>اللاعبون</span>
+          <span id="t-count">0/8</span>
+        </div>
+        <div style="background:var(--surface);border-radius:10px;height:8px;overflow:hidden">
+          <div id="t-progress" style="height:100%;background:linear-gradient(90deg,var(--accent),var(--o-color));border-radius:10px;transition:width 0.5s;width:0%"></div>
+        </div>
+      </div>
+    </div>
+    <div id="t-join-btn-wrap"></div>
+    <button class="btn btn-secondary" onclick="goHome()">← رجوع</button>
+  </div>
+
   <!-- LEADERBOARD -->
   <div class="screen" id="screen-lb">
     <div class="card">
@@ -348,6 +448,7 @@ function showScreen(id) {
 
 function goHome() {
   if (realtimeSub) { sb.removeChannel(realtimeSub); realtimeSub = null; }
+  if (tournamentSub) { sb.removeChannel(tournamentSub); tournamentSub = null; }
   gameActive = false; roomId = null; myMark = null; gameMode = null;
   showScreen('screen-home');
 }
@@ -726,6 +827,128 @@ digits.forEach((inp,i) => {
 
 // ── CREATE ROOM BUTTON ──
 document.querySelector('[onclick="showScreen(\'screen-create\')"]').onclick = function() { createRoom(); };
+
+// ── TOURNAMENT ──
+let tournamentSub = null;
+let currentTournament = null;
+
+async function showTournament() {
+  showScreen('screen-tournament');
+  await loadTournament();
+  subscribeTournament();
+}
+
+async function loadTournament() {
+  try {
+    // جلب البطولة النشطة
+    const { data: tournaments } = await sb.from('tournaments')
+      .select('*').neq('status', 'finished').order('id', {ascending: false}).limit(1);
+
+    if (!tournaments || !tournaments.length) {
+      document.getElementById('t-join-btn-wrap').innerHTML =
+        '<div style="text-align:center;color:var(--muted);padding:10px">لا يوجد بطولة حالياً</div>';
+      renderEmptySlots(0, 8);
+      return;
+    }
+
+    currentTournament = tournaments[0];
+    const t = currentTournament;
+    const count = t.registered_count || 0;
+    const size = 8;
+
+    // تحديث البادج
+    const badge = document.getElementById('t-status-badge');
+    if (t.status === 'waiting') {
+      badge.textContent = '⏳ تسجيل مفتوح';
+      badge.style.background = 'rgba(123,47,255,0.2)';
+      badge.style.color = '#a855f7';
+    } else {
+      badge.textContent = '⚔️ جارية';
+      badge.style.background = 'rgba(255,77,109,0.2)';
+      badge.style.color = 'var(--x-color)';
+    }
+
+    // تحديث العداد
+    document.getElementById('t-count').textContent = `${count}/${size}`;
+    document.getElementById('t-progress').style.width = `${(count/size)*100}%`;
+
+    // جلب اللاعبين
+    const { data: players } = await sb.from('tournament_players')
+      .select('*').eq('tournament_id', t.id).order('registered_at');
+
+    renderTournamentSlots(players || [], size);
+
+    // زر التسجيل
+    const wrap = document.getElementById('t-join-btn-wrap');
+    const isRegistered = players && players.some(p => p.telegram_id === myId);
+
+    if (t.status !== 'waiting') {
+      wrap.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:0.85rem;padding:8px">⚔️ البطولة جارية — انتظر الجولة القادمة</div>';
+    } else if (isRegistered) {
+      wrap.innerHTML = '<div style="text-align:center;color:var(--o-color);font-size:0.9rem;padding:8px">✅ أنت مسجل — انتظر اكتمال العدد!</div>';
+    } else if (count >= size) {
+      wrap.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:0.85rem;padding:8px">اكتمل العدد! انتظر البطولة القادمة</div>';
+    } else {
+      wrap.innerHTML = `<button class="btn btn-primary" onclick="joinTournamentFromApp()">⚔️ سجّل الآن — 1$</button>`;
+    }
+  } catch(e) {
+    console.error('Tournament load error:', e);
+  }
+}
+
+function renderTournamentSlots(players, size) {
+  const grid = document.getElementById('tournament-players-grid');
+  const avatars = ['🧑','👦','👩','🧔','👱','🧒','👧','🧑‍💻'];
+  let html = '';
+  for (let i = 0; i < size; i++) {
+    const p = players[i];
+    const isMe = p && p.telegram_id === myId;
+    if (p) {
+      html += `<div class="t-player-slot filled ${isMe ? 'me' : ''}">
+        <div class="t-player-avatar">${avatars[i % avatars.length]}</div>
+        <div class="t-player-name">${p.name}</div>
+        ${isMe ? '<div style="font-size:0.6rem;color:var(--o-color)">أنت ✓</div>' : ''}
+      </div>`;
+    } else {
+      html += `<div class="t-player-slot">
+        <div class="t-player-empty">👥</div>
+        <div class="t-player-num">#${i+1}</div>
+      </div>`;
+    }
+  }
+  grid.innerHTML = html;
+}
+
+function renderEmptySlots(filled, size) {
+  const grid = document.getElementById('tournament-players-grid');
+  let html = '';
+  for (let i = 0; i < size; i++) {
+    html += `<div class="t-player-slot">
+      <div class="t-player-empty">👥</div>
+      <div class="t-player-num">#${i+1}</div>
+    </div>`;
+  }
+  grid.innerHTML = html;
+  document.getElementById('t-count').textContent = `${filled}/${size}`;
+  document.getElementById('t-progress').style.width = `${(filled/size)*100}%`;
+}
+
+function subscribeTournament() {
+  if (tournamentSub) { sb.removeChannel(tournamentSub); tournamentSub = null; }
+  tournamentSub = sb.channel('tournament_live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_players' }, () => {
+      loadTournament();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, () => {
+      loadTournament();
+    })
+    .subscribe();
+}
+
+async function joinTournamentFromApp() {
+  // التسجيل يصير عبر البوت
+  showToast('اكتب /tournament بالبوت للتسجيل! 🤖');
+}
 
 // ── CANCEL WAITING ──
 async function cancelWaiting() {
