@@ -860,7 +860,7 @@ async function loadTournament() {
     currentTournament = tournaments[0];
     const t = currentTournament;
     const count = t.registered_count || 0;
-    const size = 8;
+    const size = t.total_players || 4;
 
     // تحديث البادج
     const badge = document.getElementById('t-status-badge');
