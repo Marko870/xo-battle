@@ -546,7 +546,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Admin notify error: {e}")
 
-# ── نظام إشعار الفوز ──
+# ── نظام إشعار الفوز (1v1 فقط — البطولة منفصلة) ──
 async def check_new_results(app):
     last_id = 0
     while True:
@@ -554,44 +554,53 @@ async def check_new_results(app):
             res = sb.from_("results").select("*").gt("id", last_id).order("id").execute()
             for r in res.data:
                 last_id = r["id"]
+
+                # تحقق إذا هاي المباراة بطولة — إذا كانت بطولة تجاهلها هون
+                is_tournament = sb.from_("tournament_matches").select("id").eq("room_id", r["room_id"]).execute()
+                if is_tournament.data:
+                    continue  # البطولة بتتعامل معها check_tournament_results
+
                 if not r["draw"] and r["winner_id"] and r["loser_id"]:
-                    # إضافة الجائزة للفائز
+                    # تحقق إذا الجائزة أعطيت قبل (منع التكرار)
+                    already = sb.from_("transactions").select("id").eq("telegram_id", r["winner_id"]).eq("description", f"جائزة فوز - غرفة {r['room_id']}").execute()
+                    if already.data:
+                        continue
+
                     win_res = sb.from_("balances").select("name").eq("telegram_id", r["winner_id"]).execute()
                     win_name = win_res.data[0]["name"] if win_res.data else r["winner_name"]
                     await add_balance(r["winner_id"], win_name, WINNER_PRIZE, f"جائزة فوز - غرفة {r['room_id']}")
-                    # إشعار الفائز
                     new_bal = await get_balance(r["winner_id"])
+
+                    # امسح player_rooms للاثنين
+                    sb.from_("player_rooms").delete().eq("room_id", r["room_id"]).execute()
+
                     try:
                         await app.bot.send_message(
                             chat_id=int(r["winner_id"]),
-                            text=f"🏆 *مبروك فزت!*\n\n"
-                                 f"الجائزة: `+{WINNER_PRIZE}$`\n"
-                                 f"رصيدك الجديد: `{new_bal:.2f}$`\n\n"
-                                 "العب مرة ثانية: /play 🎮",
+                            text=f"🏆 *مبروك فزت!*\n\nالجائزة: `+{WINNER_PRIZE}$`\nرصيدك الجديد: `{new_bal:.2f}$`\n\nالعب مرة ثانية: /play 🎮",
                             parse_mode="Markdown"
                         )
                     except: pass
-                    # إشعار الخاسر
                     try:
                         await app.bot.send_message(
                             chat_id=int(r["loser_id"]),
-                            text=f"😔 *خسرت هالمرة!*\n\n"
-                                 f"فاز عليك *{r['winner_name']}*\n"
-                                 "حاول مرة ثانية: /play 💪",
+                            text=f"😔 *خسرت هالمرة!*\n\nفاز عليك *{r['winner_name']}*\nحاول مرة ثانية: /play 💪",
                             parse_mode="Markdown"
                         )
                     except: pass
+
                 elif r["draw"]:
-                    # إرجاع عند التعادل
+                    already = sb.from_("transactions").select("id").eq("telegram_id", r["winner_id"] or r["loser_id"]).eq("description", f"إرجاع تعادل - غرفة {r['room_id']}").execute()
+                    if already.data:
+                        continue
+                    sb.from_("player_rooms").delete().eq("room_id", r["room_id"]).execute()
                     for uid, uname in [(r["winner_id"], r["winner_name"]), (r["loser_id"], r["loser_name"])]:
                         if uid:
                             await add_balance(uid, uname, DRAW_REFUND, f"إرجاع تعادل - غرفة {r['room_id']}")
                             try:
                                 await app.bot.send_message(
                                     chat_id=int(uid),
-                                    text=f"🤝 *تعادل!*\n\n"
-                                         f"تم إرجاع: `{DRAW_REFUND}$`\n\n"
-                                         "العب مرة ثانية: /play 🎮",
+                                    text=f"🤝 *تعادل!*\n\nتم إرجاع: `{DRAW_REFUND}$`\nالعب مرة ثانية: /play 🎮",
                                     parse_mode="Markdown"
                                 )
                             except: pass
@@ -1224,3 +1233,4 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
     app.run_polling()
+
