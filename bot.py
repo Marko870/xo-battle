@@ -130,14 +130,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sb.from_("balances").insert({"telegram_id": uid, "name": name, "balance": 0}).execute()
 
     bal = await get_balance(uid)
+    is_adm = is_admin(int(uid))
+
     keyboard = [
         [InlineKeyboardButton("🎮 افتح اللعبة", web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton("⚔️ العب الآن", callback_data="play"),
+         InlineKeyboardButton("🏆 البطولة", callback_data="tournament")],
         [InlineKeyboardButton("💰 رصيدي", callback_data="balance"),
          InlineKeyboardButton("💳 شحن", callback_data="deposit")],
-        [InlineKeyboardButton("⚔️ العب الآن", callback_data="play"),
-         InlineKeyboardButton("📊 إحصائياتي", callback_data="stats")],
-        [InlineKeyboardButton("🏆 المتصدرون", callback_data="top")]
+        [InlineKeyboardButton("📊 إحصائياتي", callback_data="stats"),
+         InlineKeyboardButton("🏅 المتصدرون", callback_data="top")],
+        [InlineKeyboardButton("❓ مساعدة", callback_data="help")],
     ]
+    if is_adm:
+        keyboard.append([InlineKeyboardButton("🛡️ لوحة الأدمن", web_app=WebAppInfo(url=f"{WEBAPP_URL}/admin.html"))])
+
     await update.message.reply_text(
         f"🎮 *أهلاً {name}!*\n\n"
         f"💰 رصيدك الحالي: *{bal:.2f}$*\n\n"
@@ -300,14 +307,16 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ ليس لديك صلاحية!")
         return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖥️ لوحة التحكم", web_app=WebAppInfo(url=f"{WEBAPP_URL}/admin.html"))],
+        [InlineKeyboardButton("💳 الشحن المعلق", callback_data="admin_pending"),
+         InlineKeyboardButton("👥 اللاعبون", callback_data="admin_players")],
+        [InlineKeyboardButton("🏆 البطولة", callback_data="admin_tournament"),
+         InlineKeyboardButton("📊 إحصائيات", callback_data="admin_stats")]
+    ])
     await update.message.reply_text(
-        "🛡️ *لوحة الأدمن:*\n\n"
-        "/confirm [ID] [مبلغ] — تأكيد شحن\n"
-        "/reject [ID] — رفض شحن\n"
-        "/addbalance [user_id] [مبلغ] — إضافة رصيد\n"
-        "/allplayers — كل اللاعبين\n"
-        "/pending — طلبات الشحن المعلقة\n"
-        "/queue — قائمة الانتظار",
+        "🛡️ *لوحة الأدمن*\n\nاختار من القائمة أو افتح لوحة التحكم 👇",
+        reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
@@ -500,6 +509,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "top":
         await top_cmd(update, context)
+
+    elif data == "help":
+        await help_cmd(update, context)
+
+    elif data == "tournament":
+        await tournament_cmd(update, context)
+
+    elif data == "admin_pending":
+        await pending_cmd(update, context)
+
+    elif data == "admin_players":
+        await allplayers_cmd(update, context)
+
+    elif data == "admin_tournament":
+        await tournament_status_cmd(update, context)
+
+    elif data == "admin_stats":
+        if not is_admin(int(uid)):
+            return
+        players = sb.from_("balances").select("telegram_id", count="exact").execute()
+        matches = sb.from_("rooms").select("id", count="exact").execute()
+        txs = sb.from_("transactions").select("amount,type").eq("type", "debit").execute()
+        revenue = sum(float(t["amount"]) for t in (txs.data or []))
+        await query.message.reply_text(
+            f"📊 *الإحصائيات:*\n\n👥 اللاعبون: `{players.count}`\n⚔️ المباريات: `{matches.count}`\n💰 الإيرادات: `{revenue:.2f}$`",
+            parse_mode="Markdown"
+        )
 
 # ── استقبال صورة الإيصال ──
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
