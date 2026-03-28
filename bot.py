@@ -1080,6 +1080,14 @@ async def add_test_bots_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ تم إضافة {added} بوت للبطولة!\nاللاعبون الآن: `{count}/{TOURNAMENT_SIZE}`",
         parse_mode="Markdown"
     )
+    # إذا اكتمل العدد — ابدأ البطولة تلقائياً
+    if count >= TOURNAMENT_SIZE:
+        sb.from_("tournaments").update({"status": "round_1"}).eq("id", t_id).execute()
+        await notify_all_tournament_players(
+            context.application, t_id,
+            f"🏆 *اكتمل العدد! البطولة ستبدأ بعد 60 ثانية!*\n\nاستعد! ⚔️"
+        )
+        asyncio.create_task(delayed_start(context.application, t_id))
 
 async def bracket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tournament = await get_active_tournament()
