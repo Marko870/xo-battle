@@ -416,12 +416,6 @@ const tgUser = tg?.initDataUnsafe?.user;
 const myId = tgUser ? String(tgUser.id) : 'local_' + Math.random().toString(36).slice(2,8);
 const myName = tgUser ? (tgUser.first_name || 'لاعب') : 'لاعب';
 
-// Debug — أظهر الـ ID بالشاشة
-setTimeout(() => {
-  showToast('ID: ' + myId + ' | ' + myName);
-}, 1000);
-
-// قراءة الـ room و mark من الرابط تلقائياً
 // لا نعتمد على URL — نقرأ الغرفة من Supabase مباشرة
 let autoRoom = null;
 let autoMark = null;
@@ -757,13 +751,23 @@ async function endOnline(result) {
 
     // تحديث إحصائيات
     if (!isDraw) {
-      await sb.from('players').update({ wins: sb.raw('wins + 1') }).eq('telegram_id', winnerId);
-      await sb.from('players').update({ losses: sb.raw('losses + 1') }).eq('telegram_id', loserId);
+      // تحديث إحصائيات الفائز
+      const { data: wp } = await sb.from('players').select('wins').eq('telegram_id', winnerId).single();
+      if (wp) await sb.from('players').update({ wins: (wp.wins||0)+1 }).eq('telegram_id', winnerId);
+      // تحديث إحصائيات الخاسر
+      const { data: lp } = await sb.from('players').select('losses').eq('telegram_id', loserId).single();
+      if (lp) await sb.from('players').update({ losses: (lp.losses||0)+1 }).eq('telegram_id', loserId);
     } else {
-      await sb.from('players').update({ draws: sb.raw('draws + 1') }).eq('telegram_id', r.player_x_id);
-      await sb.from('players').update({ draws: sb.raw('draws + 1') }).eq('telegram_id', r.player_o_id);
+      // تعادل
+      const { data: xp } = await sb.from('players').select('draws').eq('telegram_id', r.player_x_id).single();
+      if (xp) await sb.from('players').update({ draws: (xp.draws||0)+1 }).eq('telegram_id', r.player_x_id);
+      const { data: op } = await sb.from('players').select('draws').eq('telegram_id', r.player_o_id).single();
+      if (op) await sb.from('players').update({ draws: (op.draws||0)+1 }).eq('telegram_id', r.player_o_id);
     }
   }
+
+  // امسح player_rooms عشان ما يرجعه للمباراة القديمة
+  await sb.from('player_rooms').delete().eq('telegram_id', myId);
 
   // إظهار النتيجة
   setTimeout(() => {
@@ -779,6 +783,8 @@ async function handleFinished(room) {
   const result = room.winner;
   const isWinner = result === myMark;
   const isDraw = result === 'draw';
+  // امسح player_rooms
+  await sb.from('player_rooms').delete().eq('telegram_id', myId);
   setTimeout(() => {
     document.getElementById('res-emoji').textContent = isDraw?'🤝':(isWinner?'🏆':'😔');
     document.getElementById('res-title').textContent = isDraw?'تعادل!':(isWinner?'فزت! 🎉':'خسرت!');
@@ -898,6 +904,9 @@ async function loadTournament() {
 
 function renderTournamentSlots(players, size) {
   const grid = document.getElementById('tournament-players-grid');
+  // grid columns حسب الحجم
+  const cols = size <= 4 ? 2 : 4;
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   const avatars = ['🧑','👦','👩','🧔','👱','🧒','👧','🧑‍💻'];
   let html = '';
   for (let i = 0; i < size; i++) {
@@ -978,3 +987,4 @@ renderBoard(true);
 </script>
 </body>
 </html>
+
