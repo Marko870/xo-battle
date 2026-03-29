@@ -688,8 +688,16 @@ async function handleRoomUpdate(room) {
 
   const newBoard = room.board.split('').map(c=>c==='-'?'':c);
 
+  // إذا المباراة انتهت — عالجها مباشرة بغض النظر عن الدور
+  if (room.status === 'finished') {
+    board = newBoard;
+    renderBoard(true);
+    await handleFinished(room);
+    return;
+  }
+
   // لما الخصم يلعب
-  if (currentTurn !== myMark && room.current_turn !== currentTurn) {
+  if (currentTurn !== myMark) {
     const prev = [...board];
     board = newBoard;
     currentTurn = room.current_turn;
@@ -698,10 +706,6 @@ async function handleRoomUpdate(room) {
       if (c && !prev[i]) { renderBoard(currentTurn!==myMark); animateMark(i); }
     });
 
-    if (room.status === 'finished') {
-      await handleFinished(room);
-      return;
-    }
     updateTurnUI();
     if (tg) tg.HapticFeedback?.notificationOccurred('success');
   }
@@ -709,17 +713,21 @@ async function handleRoomUpdate(room) {
 
 async function saveMove() {
   const boardStr = board.map(c=>c||'-').join('');
-  const isWin = checkWin(board, myMark==='X'?'X':'O') || checkWin(board, myMark==='X'?'O':'X');
-  const isDraw = board.every(c=>c);
-  const newStatus = (isWin||isDraw) ? 'finished' : 'playing';
-  const winner = isWin ? (checkWin(board,'X')?'X':'O') : (isDraw?'draw':null);
+  // تحقق من الفائز بشكل صحيح — فقط الحركة الحالية
+  const didWin = checkWin(board, myMark);
+  const isDraw = !didWin && board.every(c=>c);
+  const newStatus = (didWin || isDraw) ? 'finished' : 'playing';
+  const winner = didWin ? myMark : (isDraw ? 'draw' : null);
 
-  await sb.from('rooms').update({
+  // حفظ بـ Supabase — مع await صحيح
+  const { error } = await sb.from('rooms').update({
     board: boardStr,
     current_turn: currentTurn,
     status: newStatus,
     winner: winner
   }).eq('id', roomId);
+
+  if (error) { console.error('saveMove error:', error); return; }
 
   if (newStatus === 'finished') {
     await endOnline(winner);
