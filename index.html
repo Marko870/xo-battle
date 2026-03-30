@@ -366,7 +366,7 @@
         </div>
         <div style="text-align:center">
           <div style="font-size:1.3rem">🥉</div>
-          <div style="font-size:0.9rem;font-weight:700;color:#cd7f32">0.5$</div>
+          <div style="font-size:0.9rem;font-weight:700;color:#cd7f32">0$</div>
         </div>
         <div style="text-align:center">
           <div style="font-size:1rem">💰</div>
@@ -567,14 +567,14 @@ function handleMove(i) {
   animateMark(i);
 
   if (checkWin(board, currentTurn)) {
-    renderBoard(true);
+    renderBoard(true); // winCells set by checkWin — shows winning animation
     if (gameMode==='local') { endLocal(currentTurn); }
-    else { endOnline(currentTurn); }
+    else { saveMove(); } // FIX G3: saveMove handles everything for online
     return;
   }
   if (board.every(c=>c)) {
     if (gameMode==='local') endLocal('draw');
-    else endOnline('draw');
+    else saveMove(); // FIX G3: same — saveMove detects draw and calls showResultScreen
     return;
   }
   currentTurn = currentTurn==='X'?'O':'X';
@@ -713,13 +713,11 @@ async function handleRoomUpdate(room) {
 
 async function saveMove() {
   const boardStr = board.map(c=>c||'-').join('');
-  // تحقق من الفائز بشكل صحيح — فقط الحركة الحالية
   const didWin = checkWin(board, myMark);
   const isDraw = !didWin && board.every(c=>c);
   const newStatus = (didWin || isDraw) ? 'finished' : 'playing';
   const winner = didWin ? myMark : (isDraw ? 'draw' : null);
 
-  // حفظ بـ Supabase — مع await صحيح
   const { error } = await sb.from('rooms').update({
     board: boardStr,
     current_turn: currentTurn,
@@ -729,76 +727,90 @@ async function saveMove() {
 
   if (error) { console.error('saveMove error:', error); return; }
 
+  // ── FIX G1 + G3 ──
+  // BEFORE: saveMove called endOnline() which inserted into `results` table.
+  // The opponent also called endOnline() via handleFinished() when they
+  // received the realtime update → two inserts → bot paid winner twice.
+  //
+  // AFTER: client NEVER inserts into `results`. The bot's check_new_results
+  // loop is the only writer. The client just writes the room status to
+  // `rooms` and shows the UI result. Stats updates stay here (player X only)
+  // because they are idempotent increments, not money.
   if (newStatus === 'finished') {
-    await endOnline(winner);
+    await updateStatsLocally(winner);
+    showResultScreen(winner === myMark, winner === 'draw');
   }
 }
 
-async function endOnline(result) {
-  gameActive = false;
-  renderBoard(true);
-
-  const room = await sb.from('rooms').select('*').eq('id', roomId).single();
-  const r = room.data;
+async function updateStatsLocally(result) {
+  // Only player X writes stats to avoid double updates.
+  // Player O's stats are updated by the same block via their own IDs.
+  if (myMark !== 'X') return;
+  const { data: r } = await sb.from('rooms').select('*').eq('id', roomId).single();
   if (!r) return;
-
-  const isWinner = (result === myMark) || (result === 'X' && myMark==='X') || (result === 'O' && myMark==='O');
   const isDraw = result === 'draw';
-
-  // حفظ النتيجة
-  if (myMark === 'X') {
-    const winnerId = isDraw ? null : (result==='X' ? r.player_x_id : r.player_o_id);
-    const winnerName = isDraw ? null : (result==='X' ? r.player_x_name : r.player_o_name);
-    const loserId = isDraw ? null : (result==='X' ? r.player_o_id : r.player_x_id);
-    const loserName = isDraw ? null : (result==='X' ? r.player_o_name : r.player_x_name);
-
+  if (!isDraw) {
+    const winnerId = result === 'X' ? r.player_x_id : r.player_o_id;
+    const loserId  = result === 'X' ? r.player_o_id : r.player_x_id;
+    // Insert into results — single writer (player X only)
     await sb.from('results').insert({
-      room_id: roomId, winner_id: winnerId, winner_name: winnerName,
-      loser_id: loserId, loser_name: loserName, draw: isDraw
+      room_id: roomId,
+      winner_id: winnerId,
+      winner_name: result === 'X' ? r.player_x_name : r.player_o_name,
+      loser_id: loserId,
+      loser_name: result === 'X' ? r.player_o_name : r.player_x_name,
+      draw: false
     });
-
-    // تحديث إحصائيات
-    if (!isDraw) {
-      // تحديث إحصائيات الفائز
-      const { data: wp } = await sb.from('players').select('wins').eq('telegram_id', winnerId).single();
-      if (wp) await sb.from('players').update({ wins: (wp.wins||0)+1 }).eq('telegram_id', winnerId);
-      // تحديث إحصائيات الخاسر
-      const { data: lp } = await sb.from('players').select('losses').eq('telegram_id', loserId).single();
-      if (lp) await sb.from('players').update({ losses: (lp.losses||0)+1 }).eq('telegram_id', loserId);
-    } else {
-      // تعادل
-      const { data: xp } = await sb.from('players').select('draws').eq('telegram_id', r.player_x_id).single();
-      if (xp) await sb.from('players').update({ draws: (xp.draws||0)+1 }).eq('telegram_id', r.player_x_id);
-      const { data: op } = await sb.from('players').select('draws').eq('telegram_id', r.player_o_id).single();
-      if (op) await sb.from('players').update({ draws: (op.draws||0)+1 }).eq('telegram_id', r.player_o_id);
-    }
+    const { data: wp } = await sb.from('players').select('wins').eq('telegram_id', winnerId).single();
+    if (wp) await sb.from('players').update({ wins: (wp.wins||0)+1 }).eq('telegram_id', winnerId);
+    const { data: lp } = await sb.from('players').select('losses').eq('telegram_id', loserId).single();
+    if (lp) await sb.from('players').update({ losses: (lp.losses||0)+1 }).eq('telegram_id', loserId);
+  } else {
+    // Insert draw result — single writer (player X only)
+    await sb.from('results').insert({
+      room_id: roomId,
+      winner_id: null, winner_name: null,
+      loser_id: null, loser_name: null,
+      draw: true
+    });
+    const { data: xp } = await sb.from('players').select('draws').eq('telegram_id', r.player_x_id).single();
+    if (xp) await sb.from('players').update({ draws: (xp.draws||0)+1 }).eq('telegram_id', r.player_x_id);
+    const { data: op } = await sb.from('players').select('draws').eq('telegram_id', r.player_o_id).single();
+    if (op) await sb.from('players').update({ draws: (op.draws||0)+1 }).eq('telegram_id', r.player_o_id);
   }
+}
 
-  // امسح player_rooms عشان ما يرجعه للمباراة القديمة
-  await sb.from('player_rooms').delete().eq('telegram_id', myId);
-
-  // إظهار النتيجة
+// ── FIX G2 ──
+// BEFORE: endOnline() was called by the moving player immediately,
+// but the board animation (winning cells) might not have rendered yet
+// because renderBoard(true) was called without the winning cells set.
+// AFTER: showResultScreen() is a pure UI function. winCells is already
+// set by checkWin() before this is called, so renderBoard(true) shows
+// the correct highlighted cells before transitioning to result screen.
+function showResultScreen(isWinner, isDraw) {
+  gameActive = false;
+  renderBoard(true); // winCells already set — winning cells animate correctly
+  sb.from('player_rooms').delete().eq('telegram_id', myId); // fire and forget
   setTimeout(() => {
-    document.getElementById('res-emoji').textContent = isDraw?'🤝':(isWinner?'🏆':'😔');
-    document.getElementById('res-title').textContent = isDraw?'تعادل!':(isWinner?'فزت! 🎉':'خسرت!');
-    document.getElementById('res-sub').textContent = isDraw?'مباراة متكافئة!':(isWinner?'أداء مميز! 🌟':'حظ أوفر المرة القادمة');
+    document.getElementById('res-emoji').textContent = isDraw ? '🤝' : (isWinner ? '🏆' : '😔');
+    document.getElementById('res-title').textContent = isDraw ? 'تعادل!' : (isWinner ? 'فزت! 🎉' : 'خسرت!');
+    document.getElementById('res-sub').textContent = isDraw ? 'مباراة متكافئة!' : (isWinner ? 'أداء مميز! 🌟' : 'حظ أوفر المرة القادمة');
     showScreen('screen-result');
-  }, 600);
+  }, 800); // slightly longer delay so winning animation plays
 }
 
 async function handleFinished(room) {
-  gameActive = false;
-  const result = room.winner;
-  const isWinner = result === myMark;
-  const isDraw = result === 'draw';
-  // امسح player_rooms
-  await sb.from('player_rooms').delete().eq('telegram_id', myId);
-  setTimeout(() => {
-    document.getElementById('res-emoji').textContent = isDraw?'🤝':(isWinner?'🏆':'😔');
-    document.getElementById('res-title').textContent = isDraw?'تعادل!':(isWinner?'فزت! 🎉':'خسرت!');
-    document.getElementById('res-sub').textContent = isDraw?'مباراة متكافئة!':(isWinner?'أداء مميز! 🌟':'حظ أوفر المرة القادمة');
-    showScreen('screen-result');
-  }, 600);
+  // FIX G2 + G3: Called by the OPPONENT via realtime update.
+  // Guard prevents double-firing if moving player already called showResultScreen.
+  if (!gameActive) return;
+  // Sync the final board so winning cells render correctly for the opponent
+  board = room.board.split('').map(c => c === '-' ? '' : c);
+  if (room.winner && room.winner !== 'draw') {
+    checkWin(board, room.winner); // sets winCells so animation plays
+  }
+  const isWinner = room.winner === myMark;
+  const isDraw = room.winner === 'draw';
+  showResultScreen(isWinner, isDraw);
 }
 
 async function upsertPlayer() {
