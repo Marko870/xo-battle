@@ -972,10 +972,18 @@ async def finish_tournament(app, tournament_id):
         final_match = sb.from_("tournament_matches").select("*") \
             .eq("tournament_id", tournament_id).eq("round", "final").execute()
         if not final_match.data:
+            logger.error(f"finish_tournament: no final match found for tournament {tournament_id}")
             return
         m = final_match.data[0]
+
+        # ── FIX: winner_id may still be null if match just finished with a draw ──
+        # check_tournament_results resolves draws before calling check_round_complete,
+        # but add a retry wait here as a safety net in case of timing gap.
         if not m["winner_id"]:
-            logger.error("finish_tournament called but final match has no winner_id yet")
+            logger.warning(f"finish_tournament: winner_id is null, waiting 3s and retrying...")
+            _advancing_rounds.discard(lock_key)
+            await asyncio.sleep(3)
+            await finish_tournament(app, tournament_id)
             return
 
         winner_id = m["winner_id"]
@@ -983,7 +991,6 @@ async def finish_tournament(app, tournament_id):
         winner_name = m["p1_name"] if winner_id == m["p1_id"] else m["p2_name"]
         loser_name = m["p2_name"] if winner_id == m["p1_id"] else m["p1_name"]
 
-        # Check prizes weren't already paid
         already = sb.from_("transactions").select("id") \
             .eq("telegram_id", winner_id) \
             .eq("description", "جائزة المركز الأول 🥇 - بطولة XO") \
@@ -1002,36 +1009,94 @@ async def finish_tournament(app, tournament_id):
                 text=f"🥇 *مبروك! أنت بطل البطولة!*\n\nجائزتك: `+{PRIZE_1ST}$` 🏆\n\nأحسنت! 🌟",
                 parse_mode="Markdown"
             )
-        except:
-            pass
+        except: pass
         try:
             await app.bot.send_message(
                 chat_id=int(loser_id),
                 text=f"🥈 *أحسنت! وصلت للنهائي!*\n\nجائزتك: `+{PRIZE_2ND}$` 🎉",
                 parse_mode="Markdown"
             )
-        except:
-            pass
+        except: pass
 
         sb.from_("tournaments").update({"status": "finished", "finished_at": "now()"}).eq("id", tournament_id).execute()
         sb.from_("tournaments").insert({"status": "waiting", "current_round": "waiting"}).execute()
 
-        # FIX T3: notify ALL players including eliminated ones about tournament end
         all_players = sb.from_("tournament_players").select("telegram_id") \
             .eq("tournament_id", tournament_id).execute()
         for p in all_players.data:
             if p["telegram_id"] in [winner_id, loser_id]:
-                continue  # already notified above
+                continue
             try:
                 await app.bot.send_message(
                     chat_id=int(p["telegram_id"]),
                     text=f"🏆 *انتهت البطولة!*\n\n🥇 البطل: *{winner_name}*\n🥈 الوصيف: *{loser_name}*\n\nشكراً للمشاركة! 🎮\nسجّل بالبطولة الجديدة: /tournament",
                     parse_mode="Markdown"
                 )
-            except:
-                pass
+            except: pass
     finally:
         _advancing_rounds.discard(lock_key)
+
+# ══════════════════════════════════════════
+# NEW: /fix_tournament — admin emergency command
+# Manually force-finishes a stuck tournament.
+# Use when tournament is stuck in "final" state
+# and the automatic loop failed to resolve it.
+# ══════════════════════════════════════════
+async def fix_tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    tournament = await get_active_tournament()
+    if not tournament:
+        await update.message.reply_text("❌ لا يوجد بطولة نشطة.")
+        return
+    t_id = tournament["id"]
+
+    # Clear all locks for this tournament so we can force proceed
+    _advancing_rounds.discard(f"{t_id}:round_1")
+    _advancing_rounds.discard(f"{t_id}:final")
+    _advancing_rounds.discard(f"{t_id}:finish")
+    _starting_tournaments.discard(t_id)
+
+    # Check final match state
+    final_match = sb.from_("tournament_matches").select("*") \
+        .eq("tournament_id", t_id).eq("round", "final").execute()
+
+    if not final_match.data:
+        await update.message.reply_text(
+            f"⚠️ لا يوجد مباراة نهائية بعد.\nحالة البطولة: `{tournament['status']}`\n\nجرب /tournament_status للتفاصيل.",
+            parse_mode="Markdown"
+        )
+        return
+
+    m = final_match.data[0]
+    if not m["winner_id"]:
+        # Final match exists but no winner — force a coin flip
+        import random
+        room = sb.from_("rooms").select("*").eq("id", m["room_id"]).execute()
+        if room.data:
+            r = room.data[0]
+            winner_id = random.choice([r["player_x_id"], r["player_o_id"]])
+        else:
+            winner_id = random.choice([m["p1_id"], m["p2_id"]])
+
+        sb.from_("tournament_matches").update({
+            "winner_id": winner_id,
+            "status": "finished",
+            "finished_at": "now()"
+        }).eq("id", m["id"]).execute()
+
+        await update.message.reply_text(
+            f"🔧 تم تحديد الفائز بالقرعة: `{winner_id}`\nجاري إنهاء البطولة...",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            f"🔧 المباراة النهائية لها فائز: `{m['winner_id']}`\nجاري إنهاء البطولة...",
+            parse_mode="Markdown"
+        )
+
+    await finish_tournament(update.get_bot() or context.bot, t_id)
+    await update.message.reply_text("✅ تم إنهاء البطولة يدوياً.")
 
 async def tournament_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1296,24 +1361,54 @@ async def check_tournament_results(app):
                 if not room.data:
                     continue
                 r = room.data[0]
-                if r["status"] == "finished" and r.get("winner"):
-                    winner_id = r["player_x_id"] if r["winner"] == "X" else r["player_o_id"]
+                if r["status"] != "finished" or not r.get("winner"):
+                    continue
 
-                    # FIX T1: update match status FIRST before calling check_round_complete
-                    # This prevents the next loop iteration from re-processing this match
-                    update_res = sb.from_("tournament_matches").update({
-                        "winner_id": winner_id,
-                        "status": "finished",
-                        "finished_at": "now()"
-                    }).eq("id", m["id"]).eq("status", "playing").execute()  # eq status guard
+                import random
+                room_winner = r["winner"]
 
-                    if not update_res.data:
-                        # Another coroutine already updated this match
-                        continue
-
+                # ── FIX: Handle draw in tournament match ──
+                # Before: winner="draw" → winner_id set to player_o_id (wrong),
+                # then finish_tournament found winner_id=NULL → returned early → stuck.
+                # After: draw in a tournament match is resolved by coin flip.
+                # Tournament matches MUST have a winner — draws are not a valid outcome.
+                if room_winner == "draw":
+                    winner_id = random.choice([r["player_x_id"], r["player_o_id"]])
                     loser_id = r["player_o_id"] if winner_id == r["player_x_id"] else r["player_x_id"]
-                    sb.from_("player_rooms").delete().eq("telegram_id", loser_id).execute()
-                    await check_round_complete(app, m["tournament_id"], m["round"])
+                    winner_name = r["player_x_name"] if winner_id == r["player_x_id"] else r["player_o_name"]
+                    loser_name = r["player_o_name"] if winner_id == r["player_x_id"] else r["player_x_name"]
+                    # Notify both players about the coin flip
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(winner_id),
+                            text=f"🤝 *تعادل — فزت بالقرعة!*\n\nالمباراة انتهت تعادلاً، تم اختيارك بالقرعة للتقدم! 🍀",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(loser_id),
+                            text=f"🤝 *تعادل — خرجت بالقرعة*\n\nالمباراة انتهت تعادلاً، للأسف القرعة لم تكن بصفك. حظ أحسن! 😔",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
+                else:
+                    winner_id = r["player_x_id"] if room_winner == "X" else r["player_o_id"]
+                    loser_id = r["player_o_id"] if winner_id == r["player_x_id"] else r["player_x_id"]
+
+                # FIX T1: update match BEFORE calling check_round_complete
+                # Atomic guard: only proceeds if status is still "playing"
+                update_res = sb.from_("tournament_matches").update({
+                    "winner_id": winner_id,
+                    "status": "finished",
+                    "finished_at": "now()"
+                }).eq("id", m["id"]).eq("status", "playing").execute()
+
+                if not update_res.data:
+                    continue  # Another coroutine already handled this match
+
+                sb.from_("player_rooms").delete().eq("telegram_id", loser_id).execute()
+                await check_round_complete(app, m["tournament_id"], m["round"])
 
         except Exception as e:
             logger.error(f"Tournament results check error: {e}")
@@ -1348,6 +1443,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("cancel_tournament", cancel_tournament_cmd))
     app.add_handler(CommandHandler("tournament_status", tournament_status_cmd))
     app.add_handler(CommandHandler("add_test_bots", add_test_bots_cmd))
+    app.add_handler(CommandHandler("fix_tournament", fix_tournament_cmd))  # NEW: emergency unstick
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot running...")
